@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------- build output
+build/
+build-ninja/
+_obj/
+**/*.obj
+**/*.pdb
+**/*.ilk
+**/*.exp
+**/*.lib
+**/*.tlog
+**/*.log
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Slint compiles ui/main.slint into a generated C++ header under the build tree
+**/main.h
+
+# ---------------------------------------------------------------- generated settings
+# Written next to the executable (never in the working directory). A copy can also
+# appear in tests/bin while the test suite runs.
+android-versions.txt
+apkinfo-config.json
+
+# ---------------------------------------------------------------- test artifacts
+tests/bin/
+tests/fixtures/
+tests/alpine/synthetic_*.apk
+tests/**/_*.ps1
+docs/screenshots/_*.png
+
+# ---------------------------------------------------------------- editors / OS
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+__pycache__/
+*.pyc
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*~
+*.swp

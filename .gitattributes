@@ -1,0 +1,17 @@
+# Store every text file with LF in the index and check it out with LF as well: the
+# toolchain (MSVC, PowerShell, CMake) does not care, and it keeps diffs small.
+* text=auto eol=lf
+
+# Binaries: never touch these
+*.png   binary
+*.ico   binary
+*.apk   binary
+*.apks  binary
+*.zip   binary
+*.dll   binary
+*.exe   binary
+*.arsc  binary
+*.bin   binary
+
+# Generated screenshots are PNGs above; SVG sources stay text
+*.svg   text eol=lf

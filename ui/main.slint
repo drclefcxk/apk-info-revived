@@ -1,0 +1,643 @@
+// APK Info — Revived: main window + the section viewer window.
+//
+// One screen for two very different package worlds (Android apk/apks and Alpine
+// apk): the C++ side flattens either package into rows, so this view stays dumb.
+//
+// Layout notes
+//  * The window chrome is plain layouts; the tabbed panel positions its three
+//    bands (tab bar, separator, list) with explicit geometry, which keeps the
+//    list at a deterministic size regardless of how the surrounding layout
+//    distributes space.
+//  * Information rows are a virtualised ListView: section header, label/value
+//    rows, full width monospace lines and a "show all (N)" button for sections
+//    with too many entries. The first few entries are always shown with exactly
+//    the same rendering as the basic information.
+//  * "Show all" opens TextViewer: a separate window whose body is one read-only
+//    text box (selectable, Ctrl+C, own scrollbar).
+//  * The Contents tab is a collapsed tree: only visible nodes become rows, which
+//    is what keeps a 20000 entry package responsive.
+import { VerticalBox, HorizontalBox, Button, ScrollView, ListView, TextEdit, ComboBox } from "std-widgets.slint";
+
+// Kind: 0 = section header, 1 = label / value row, 2 = full width monospace line,
+//       4 = "show all" button, 5 = file tree node, 6 = split bundle member
+export struct InfoRowItem {
+    kind: int,
+    label: string,
+    value: string,
+    hint: string,
+    mono: bool,
+    indent: int,
+    toggle: int,
+    payload: int,
+}
+
+// A toolbar button that never touches the bar edges: the container fills the
+// bar, the button itself keeps a 30px height and is centred vertically.
+component ToolbarButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> actionable: true;
+    callback clicked();
+    background: transparent;
+
+    button := Button {
+        x: 0px;
+        width: parent.width;
+        height: 30px;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        primary: root.primary;
+        enabled: root.actionable;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A button that keeps its 30px height inside a horizontal layout: layouts size
+// their children themselves, so the height has to be applied by a wrapper (the same
+// trick the main toolbar uses).
+component StripButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    background: transparent;
+
+    b := Button {
+        x: 0px;
+        width: parent.width;
+        height: 30px;
+        y: (parent.height - self.height) / 2;
+        text: root.text;
+        clicked => { root.clicked(); }
+    }
+}
+
+component TabLabel inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked();
+    height: 100%;
+    width: caption.preferred-width + 28px;
+    background: transparent;
+
+    caption := Text {
+        x: 14px;
+        y: 0px;
+        height: 100%;
+        text: root.label;
+        font-size: 13px;
+        font-weight: root.active ? 700 : 400;
+        color: root.active ? #1d2330 : #74808f;
+        vertical-alignment: center;
+    }
+    Rectangle {
+        y: root.height - 2px;
+        height: 2px;
+        width: root.width;
+        background: root.active ? #2b6ce0 : transparent;
+    }
+    TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+}
+
+// A separate window showing one long section: the body is a single read-only text
+// box, so the whole list can be selected and copied with Ctrl+C.
+export component TextViewer inherits Window {
+    title: root.viewer-title;
+    preferred-width: 720px;
+    preferred-height: 560px;
+    min-width: 420px;
+    min-height: 260px;
+    background: #f5f6f8;
+
+    in-out property <string> viewer-title: "Details";
+    in-out property <string> viewer-text;
+    in-out property <string> viewer-hint;
+    in-out property <string> label-close: "Close";
+
+    callback close-requested();
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 46px;
+            background: #ffffff;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 10px;
+                spacing: 10px;
+                alignment: center;
+                Text {
+                    text: root.viewer-title;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #1d2330;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.viewer-hint;
+                    font-size: 12px;
+                    color: #8b95a3;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                // Wrapped: a bare Button inside a layout stretched over the whole
+                // 46px header. StripButton keeps 30px, like the main toolbar.
+                close := StripButton {
+                    width: 88px;
+                    text: root.label-close;
+                    clicked => { root.close-requested(); }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #e3e6ea; }
+
+        Rectangle {
+            x: 12px;
+            width: parent.width - 24px;
+            vertical-stretch: 1;
+            background: #ffffff;
+
+            body := TextEdit {
+                x: 10px;
+                y: 8px;
+                width: parent.width - 20px;
+                height: parent.height - 16px;
+                text: root.viewer-text;
+                read-only: true;
+                wrap: word-wrap;
+                font-size: 12px;
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "APK Info — Revived";
+    preferred-width: 1180px;
+    preferred-height: 800px;
+    min-width: 880px;
+    min-height: 560px;
+    background: #f5f6f8;
+
+    in-out property <[InfoRowItem]> rows;
+    in-out property <[InfoRowItem]> contents-rows;
+    in-out property <string> app-title;
+    in-out property <string> app-subtitle;
+    in-out property <string> app-badge;
+    in-out property <string> status-text;
+    in-out property <string> contents-title: "Contents";
+    in-out property <string> file-name;
+    in-out property <image> app-icon;
+    in-out property <bool> has-icon: false;
+    in-out property <bool> has-error: false;
+    in-out property <string> error-text;
+    in-out property <[string]> warnings;
+    in-out property <int> tab: 0;
+
+    // localised chrome text, pushed in from C++ (see src/i18n.cpp)
+    in-out property <string> label-open: "Open package…";
+    in-out property <string> label-reload: "Reload";
+    in-out property <string> label-information: "Information";
+    in-out property <string> label-notes: "Notes";
+    in-out property <string> label-no-preview: "no preview";
+    // language dropdown: index 0 = follow the system, 1 = 中文, 2 = English
+    in-out property <int> language-index: 0;
+    in-out property <[string]> language-options: ["跟随系统 / System", "中文", "English"];
+    in-out property <string> label-copy-all: "Copy all";
+    in-out property <string> label-dump: "Dump…";
+    in-out property <string> label-export-icon: "Export icon…";
+
+    callback open-requested();
+    callback reload-requested();
+    callback language-selected(int);
+    callback copy-all-requested();
+    callback dump-requested();
+    callback export-icon-requested();
+    callback info-row-clicked(int);
+    callback contents-row-clicked(int);
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // ------------------------------------------------------------------ top bar
+        //
+        // Explicit geometry: a text block on the left and a fixed-width button
+        // cluster pinned to the right edge. Laying these out in one horizontal
+        // layout let the elided status text steal width from the buttons, which
+        // pushed the last button past the window edge.
+        Rectangle {
+            height: 58px;
+            background: #ffffff;
+
+            // left: title + status
+            Rectangle {
+                x: 18px;
+                y: 0px;
+                width: parent.width - 18px - 800px;
+                height: 100%;
+                background: transparent;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "APK Info";
+                        font-size: 17px;
+                        font-weight: 700;
+                        color: #1d2330;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "Revived";
+                        font-size: 12px;
+                        color: #8b95a3;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Text {
+                        text: root.status-text;
+                        font-size: 12px;
+                        color: #6b7480;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // right: language / copy / dump / export / reload / open
+            // (180 + 88 + 88 + 104 + 88 + 148 + 5*10 = 746)
+            HorizontalLayout {
+                x: parent.width - 764px;
+                y: 0px;
+                width: 746px;
+                height: 100%;
+                spacing: 10px;
+                // The dropdown replaces the old toggle: "follow the system" is the
+                // default, and the choice is stored in apkinfo-config.json.
+                VerticalLayout {
+                    width: 180px;
+                    alignment: center;
+                    ComboBox {
+                        model: root.language-options;
+                        current-index: root.language-index;
+                        selected(value) => { root.language-selected(self.current-index); }
+                    }
+                }
+                ToolbarButton {
+                    width: 88px;
+                    text: root.label-copy-all;
+                    clicked => { root.copy-all-requested(); }
+                }
+                ToolbarButton {
+                    width: 88px;
+                    text: root.label-dump;
+                    clicked => { root.dump-requested(); }
+                }
+                ToolbarButton {
+                    width: 104px;
+                    text: root.label-export-icon;
+                    actionable: root.has-icon;
+                    clicked => { root.export-icon-requested(); }
+                }
+                ToolbarButton {
+                    width: 88px;
+                    text: root.label-reload;
+                    clicked => { root.reload-requested(); }
+                }
+                ToolbarButton {
+                    width: 148px;
+                    text: root.label-open;
+                    primary: true;
+                    clicked => { root.open-requested(); }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #e3e6ea; }
+
+        // -------------------------------------------------------------- error banner
+        if root.has-error: Rectangle {
+            background: #fdecec;
+            border-color: #f3bcbc;
+            border-width: 1px;
+            HorizontalLayout {
+                padding: 10px;
+                spacing: 8px;
+                alignment: center;
+                Text { text: "⚠"; color: #b42318; font-size: 14px; }
+                Text {
+                    text: root.error-text;
+                    color: #b42318;
+                    font-size: 13px;
+                    horizontal-stretch: 1;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------- body
+        HorizontalLayout {
+            spacing: 12px;
+            padding: 14px;
+
+            // ---- left: identity card
+            Rectangle {
+                width: 320px;
+                background: #ffffff;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #e3e6ea;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+
+                    Rectangle {
+                        height: 150px;
+                        border-radius: 14px;
+                        background: #f0f2f5;
+                        if root.has-icon: Image {
+                            source: root.app-icon;
+                            image-fit: contain;
+                            width: 100%;
+                            height: 100%;
+                        }
+                        if !root.has-icon: Text {
+                            text: root.label-no-preview;
+                            color: #a6aebb;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: root.app-title;
+                        font-size: 18px;
+                        font-weight: 700;
+                        color: #1d2330;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.app-subtitle;
+                        font-size: 12px;
+                        color: #6b7480;
+                        wrap: word-wrap;
+                    }
+                    if root.app-badge != "": Text {
+                        text: root.app-badge;
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: #2b4a86;
+                    }
+                    Text {
+                        text: root.file-name;
+                        font-size: 11px;
+                        color: #98a1ae;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+
+                    if root.warnings.length > 0: VerticalLayout {
+                        spacing: 3px;
+                        Text {
+                            text: root.label-notes;
+                            font-size: 11px;
+                            font-weight: 700;
+                            color: #8b95a3;
+                        }
+                        for warning in root.warnings: Text {
+                            text: "• " + warning;
+                            font-size: 11px;
+                            color: #8a6d3b;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // ---- right: tabbed panel (explicit geometry, see file header)
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #ffffff;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #e3e6ea;
+
+                // tab bar
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: 42px;
+                    background: transparent;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        TabLabel {
+                            label: root.label-information;
+                            active: root.tab == 0;
+                            clicked => { root.tab = 0; }
+                        }
+                        TabLabel {
+                            label: root.contents-title;
+                            active: root.tab == 1;
+                            clicked => { root.tab = 1; }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                    }
+                }
+                Rectangle {
+                    x: 0px;
+                    y: 42px;
+                    width: parent.width;
+                    height: 1px;
+                    background: #e9ecf0;
+                }
+
+                // information
+                ListView {
+                    x: 0px;
+                    y: 43px;
+                    width: parent.width;
+                    height: parent.height - 43px;
+                    visible: root.tab == 0;
+
+                    for row[index] in root.rows: Rectangle {
+                        height: row.kind == 0 ? 38px : (row.kind == 4 ? 34px : 26px);
+                        background: transparent;
+
+                        // section header
+                        if row.kind == 0: Text {
+                            x: 22px;
+                            y: 0px;
+                            height: 100%;
+                            width: parent.width - 44px;
+                            text: row.value;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: bottom;
+                            overflow: elide;
+                        }
+                        // label / value
+                        if row.kind == 1: HorizontalLayout {
+                            x: 22px;
+                            width: parent.width - 44px;
+                            height: 100%;
+                            spacing: 10px;
+                            Text {
+                                width: 172px;
+                                text: row.label + ":";
+                                font-size: 13px;
+                                color: #74808f;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            // A read-only text input keeps the selection machinery
+                            // Slint's Text element does not have, so the value can be
+                            // selected and copied row by row.
+                            TextInput {
+                                horizontal-stretch: 1;
+                                text: row.value;
+                                read-only: true;
+                                single-line: true;
+                                font-size: 13px;
+                                color: #1d2330;
+                                vertical-alignment: center;
+                                font-family: row.mono ? "Consolas" : "Segoe UI";
+                            }
+                        }
+                        // full width monospace line (list entries)
+                        if row.kind == 2: TextInput {
+                            x: 22px;
+                            y: 0px;
+                            width: parent.width - 44px;
+                            height: 100%;
+                            text: row.value;
+                            read-only: true;
+                            single-line: true;
+                            font-size: 12px;
+                            color: #1d2330;
+                            vertical-alignment: center;
+                            font-family: "Consolas";
+                        }
+                        // "show all (N)" - opens the viewer window for this section
+                        if row.kind == 4: Rectangle {
+                            x: 22px;
+                            width: 240px;
+                            height: 26px;
+                            y: 4px;
+                            border-radius: 6px;
+                            background: show-all-area.has-hover ? #e8effc : #f2f5fa;
+                            border-width: 1px;
+                            border-color: #d5e0f5;
+
+                            Text {
+                                x: 10px;
+                                height: 100%;
+                                text: row.label;
+                                font-size: 12px;
+                                font-weight: 600;
+                                color: #2b6ce0;
+                                vertical-alignment: center;
+                            }
+                            show-all-area := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.info-row-clicked(index); }
+                            }
+                        }
+                    }
+                }
+
+                // contents: file tree or split members (virtualised)
+                ListView {
+                    x: 0px;
+                    y: 43px;
+                    width: parent.width;
+                    height: parent.height - 43px;
+                    visible: root.tab == 1;
+
+                    for row[index] in root.contents-rows: Rectangle {
+                        height: 26px;
+                        background: tree-hover.has-hover && row.toggle != 0 ? #f4f7fb : transparent;
+
+                        // Click target for expanding a directory. Declared before the
+                        // row content (later siblings sit on top).
+                        tree-hover := TouchArea {
+                            mouse-cursor: row.toggle != 0 ? pointer : default;
+                            clicked => { root.contents-row-clicked(index); }
+                        }
+
+                        // file tree node
+                        if row.kind == 5: HorizontalLayout {
+                            x: 18px + row.indent * 14px;
+                            width: parent.width - 36px - row.indent * 14px;
+                            height: 100%;
+                            spacing: 6px;
+                            Text {
+                                width: 14px;
+                                text: row.toggle == 2 ? "▾" : (row.toggle == 1 ? "▸" : "");
+                                font-size: 10px;
+                                color: #8b95a3;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                horizontal-stretch: 1;
+                                text: row.label;
+                                font-family: "Consolas";
+                                font-size: 12px;
+                                color: #1d2330;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.value;
+                                font-size: 11px;
+                                color: #8b95a3;
+                                width: 110px;
+                                horizontal-alignment: right;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                        }
+                        // split bundle member
+                        if row.kind == 6: HorizontalLayout {
+                            x: 18px;
+                            width: parent.width - 36px;
+                            height: 100%;
+                            spacing: 12px;
+                            Text {
+                                text: row.label;
+                                font-family: "Consolas";
+                                font-size: 12px;
+                                color: #1d2330;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.hint;
+                                font-size: 11px;
+                                color: #8b95a3;
+                                width: 190px;
+                                horizontal-alignment: right;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.value;
+                                font-size: 12px;
+                                color: #4b5563;
+                                width: 100px;
+                                horizontal-alignment: right;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
