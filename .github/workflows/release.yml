@@ -120,8 +120,8 @@ jobs:
         run: |
           $version = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
           if (-not $version) { $version = "v1.0.0" }
-          $name = "APK-Info-Revived-$version-win64"
-          $stage = Join-Path "dist" $name
+          $archiveName = "APK-Info-Revived-$version-win64"
+          $stage = Join-Path "dist" $archiveName
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item "build\Release\ApkInfo.exe" $stage
           Copy-Item "build\Release\apkinfo-cli.exe" $stage
@@ -131,13 +131,13 @@ jobs:
           # icons next to themselves, so the extracted folder can register itself
           Copy-Item "Register-FileAssociations.ps1", "Unregister-FileAssociations.ps1" $stage
           New-Item -ItemType Directory -Force -Path "$stage\icons" | Out-Null
-          foreach ($name in @("app", "apk", "apks", "android", "alpine")) {
-              Copy-Item "assets\icons\$name.ico" "$stage\icons"
+          foreach ($iconName in @("app", "apk", "apks", "android", "alpine")) {
+              Copy-Item "assets\icons\$iconName.ico" "$stage\icons"
           }
-          Compress-Archive -Path "$stage\*" -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist/$archiveName.zip" -CompressionLevel Optimal
           Get-ChildItem dist | Select-Object Name, Length
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "ARCHIVE=dist/$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ARCHIVE=dist/$archiveName.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload the build artifact
         uses: actions/upload-artifact@v4
