@@ -551,7 +551,9 @@ $app = Start-App $Single
 try {
     $shot = Capture $app.Handle "60-lang"
     $lines = Get-Lines $shot.Path
-    $combo = $lines | Where-Object { $_.Y -lt 95 -and $_.Text -match "系统|System|中文|English" } |
+    # the first entry is localised ("跟随系统" / "Follow system") and OCR puts spaces
+    # between CJK characters, so match tolerantly
+    $combo = $lines | Where-Object { $_.Y -lt 95 -and $_.Text -match "系\s*统|System|中\s*文|English" } |
              Select-Object -First 1
     Check ($null -ne $combo) "the language dropdown is in the toolbar"
 
@@ -572,6 +574,10 @@ try {
             $saved = Get-Content $configFile -Raw -ErrorAction SilentlyContinue
             Check ($null -ne $saved -and $saved -match '"language"\s*:\s*"en"') `
                   "the choice is stored in apkinfo-config.json"
+
+            # and the control itself must show the pick, not stay on the first entry
+            $label = @($after | Where-Object { $_.Y -lt 95 -and $_.Text -match "English" })
+            Check ($label.Count -ge 1) "the dropdown shows the selected language (English)"
         }
     }
 }

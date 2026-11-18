@@ -278,6 +278,12 @@ export component MainWindow inherits Window {
                 VerticalLayout {
                     width: 180px;
                     alignment: center;
+
+                    // The model is constant and bilingual on purpose: replacing it on a
+                    // language change made the control reset current-index to the first
+                    // entry, which is what made the dropdown look stuck on "follow the
+                    // system". A two-way binding on current-index would be the other way to
+                    // keep them in sync, but this widget turns that into a binding loop.
                     ComboBox {
                         model: root.language-options;
                         current-index: root.language-index;

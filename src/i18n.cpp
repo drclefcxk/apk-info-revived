@@ -23,7 +23,6 @@ struct Entry {
 // Keys are the exact English strings used in the code, grouped by area.
 // Duplicate keys are a bug: tests/i18n/test.cpp checks the table.
 constexpr Entry kDictionary[] = {
-    {"Follow system", "跟随系统"},
     {"lines", "行"},
     {"PNG image (*.png)", "PNG 图像 (*.png)"},
     {"Save the application icon", "保存应用图标"},

@@ -622,14 +622,11 @@ void apply_chrome(MainWindow& ui) {
             index = 0;
             break;
     }
+    // The dropdown's model is constant (its entries are the language names, with the
+    // system entry written bilingually), so only the selection is set here. Rebuilding
+    // the model on a language change reset the control to its first entry, which is what
+    // made it look stuck on "follow the system".
     ui.set_language_index(index);
-    // "Follow the system" is chrome and follows the current language; the two language
-    // names stay in their own language, which is what a language picker is for.
-    auto options = std::make_shared<slint::VectorModel<slint::SharedString>>();
-    options->push_back(slint::SharedString(tr("Follow system")));
-    options->push_back(slint::SharedString("中文"));
-    options->push_back(slint::SharedString("English"));
-    ui.set_language_options(options);
 }
 
 // ---------------------------------------------------------------------------
