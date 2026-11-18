@@ -89,32 +89,43 @@ $outDir = if (Test-Path (Join-Path $build $Configuration)) { Join-Path $build $C
 # The executables link slint_cpp.dll and the vcpkg ports dynamically, so a Windows
 # run needs those DLLs next to them. Copying them here keeps a local build and the
 # release archive identical (the release zip is exactly this directory).
-# Every library is matched by a group of candidate names: vcpkg has shipped zlib as
-# both zlib1.dll and z.dll depending on the port version.
+#
+# The libraries are matched by glob on purpose: vcpkg's zlib has shipped as
+# zlib1.dll, z.dll and libz.dll depending on the image, and a hardcoded list left
+# the release archive without one. Debug builds live in the triplet's debug/bin, so
+# bin only holds release DLLs.
 if (-not $NoDeploy) {
     $groups = @()
-    if ($slintDir) { $groups += , @{ Name = "slint"; Dir = (Join-Path $slintDir "lib"); Files = @("slint_cpp.dll") } }
+    if ($slintDir) {
+        $groups += , @{ Name = "slint"; Dir = (Join-Path $slintDir "lib"); Patterns = @("slint_cpp.dll") }
+    }
     if ($vcpkg) {
         $vcpkgBin = Join-Path $vcpkg "installed/x64-windows/bin"
-        $groups += , @{ Name = "webp"; Dir = $vcpkgBin; Files = @("libwebp.dll", "libsharpyuv.dll") }
-        $groups += , @{ Name = "zlib"; Dir = $vcpkgBin; Files = @("zlib1.dll", "z.dll") }
-        $groups += , @{ Name = "zstd"; Dir = $vcpkgBin; Files = @("zstd.dll") }
+        $groups += , @{ Name = "webp"; Dir = $vcpkgBin; Patterns = @("libwebp.dll", "libsharpyuv.dll") }
+        $groups += , @{ Name = "zlib"; Dir = $vcpkgBin; Patterns = @("zlib*.dll", "libz*.dll", "z.dll") }
+        $groups += , @{ Name = "zstd"; Dir = $vcpkgBin; Patterns = @("zstd*.dll") }
     }
-    $copied = 0
+    $copied = @()
     $missing = @()
     foreach ($group in $groups) {
-        $found = @()
-        foreach ($name in $group.Files) {
-            $candidate = Join-Path $group.Dir $name
-            if (Test-Path $candidate) {
-                Copy-Item -Path $candidate -Destination $outDir -Force
-                $copied++
-                $found += $name
+        $matches = @()
+        foreach ($pattern in $group.Patterns) {
+            if (Test-Path $group.Dir) {
+                $matches += @(Get-ChildItem -Path (Join-Path $group.Dir $pattern) -File -ErrorAction SilentlyContinue)
             }
         }
-        if ($found.Count -eq 0) { $missing += "$($group.Name) ($($group.Files -join '|'))" }
+        if ($matches.Count -eq 0) {
+            $missing += "$($group.Name) ($($group.Patterns -join '|'))"
+            continue
+        }
+        foreach ($file in $matches) {
+            Copy-Item -Path $file.FullName -Destination $outDir -Force
+            $copied += $file.Name
+        }
     }
-    if ($copied -gt 0) { Write-Host "== runtime: $copied DLL(s) beside the executables ==" -ForegroundColor Cyan }
+    if ($copied.Count -gt 0) {
+        Write-Host "== runtime: $($copied.Count) DLL(s) beside the executables: $($copied -join ', ') ==" -ForegroundColor Cyan
+    }
     if ($missing.Count -gt 0) {
         Write-Host "warning: no runtime DLL found for: $($missing -join ', ')" -ForegroundColor Yellow
     }
