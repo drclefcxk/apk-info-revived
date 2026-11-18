@@ -102,6 +102,12 @@ jobs:
           $plain = Invoke-Cli "README.md"
           if ($plain.Output -notmatch "unrecognised") { throw "a plain file was not rejected" }
 
+          # the association scripts must run from a flat folder (they land in the release)
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\Register-FileAssociations.ps1 -DryRun -Exe "build\Release\ApkInfo.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Register-FileAssociations.ps1 -DryRun failed" }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\Unregister-FileAssociations.ps1 -DryRun
+          if ($LASTEXITCODE -ne 0) { throw "Unregister-FileAssociations.ps1 -DryRun failed" }
+
           # the viewer binary and its runtime must be there
           foreach ($file in @("ApkInfo.exe", "slint_cpp.dll", "libwebp.dll", "zstd.dll")) {
               if (-not (Test-Path "build\Release\$file")) { throw "missing build/Release/$file" }
@@ -121,6 +127,13 @@ jobs:
           Copy-Item "build\Release\apkinfo-cli.exe" $stage
           Copy-Item "build\Release\*.dll" $stage
           Copy-Item "LICENSE", "README.md", "README.en.md" $stage
+          # the association scripts belong to the release: they resolve ApkInfo.exe and the
+          # icons next to themselves, so the extracted folder can register itself
+          Copy-Item "Register-FileAssociations.ps1", "Unregister-FileAssociations.ps1" $stage
+          New-Item -ItemType Directory -Force -Path "$stage\icons" | Out-Null
+          foreach ($name in @("app", "apk", "apks", "android", "alpine")) {
+              Copy-Item "assets\icons\$name.ico" "$stage\icons"
+          }
           Compress-Archive -Path "$stage\*" -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
           Get-ChildItem dist | Select-Object Name, Length
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append

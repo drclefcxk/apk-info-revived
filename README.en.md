@@ -148,8 +148,19 @@ rejected — no sample packages or aapt2 toolchain needed.
 ### File associations
 
 ```powershell
-.\Register-FileAssociations.ps1     # register .apk / .apks for the current user
-.\Unregister-FileAssociations.ps1   # undo (with a rollback backup)
+.\Register-FileAssociations.ps1              # register .apk / .apks / .apkm / .xapk for the current user
+.\Register-FileAssociations.ps1 -DryRun      # show what would be registered, touch nothing
+.\Unregister-FileAssociations.ps1            # undo (with a rollback backup)
+```
+
+Both scripts and their `icons\` folder ship **inside the release archive**, so an
+extracted release can register itself: they look for `ApkInfo.exe` beside themselves and
+fall back to `build\Release\ApkInfo.exe`, and likewise look for `icons\` before
+`assets\icons\`. Archives downloaded from GitHub carry the mark of the web, so unblock
+them first if Windows refuses to run them:
+
+```powershell
+Get-ChildItem | Unblock-File
 ```
 
 Explorer picks a file-type icon from the **extension**, before the file is opened, so an

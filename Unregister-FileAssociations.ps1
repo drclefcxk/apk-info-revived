@@ -1,7 +1,14 @@
-# Undoes Register-FileAssociations.ps1: removes the ApkInfo ProgIDs, the "Open
+﻿# Undoes Register-FileAssociations.ps1: removes the ApkInfo ProgIDs, the "Open
 # with" entry, and restores whatever was registered for these extensions before.
 #
 #   .\Unregister-FileAssociations.ps1
+#   .\Unregister-FileAssociations.ps1 -DryRun     # show what would be removed
+#
+# Works from the source tree and from the extracted release archive alike.
+
+param(
+    [switch]$DryRun
+)
 
 $ErrorActionPreference = "Stop"
 Add-Type @"
@@ -20,6 +27,12 @@ function Get-DefaultValue([string]$path) {
     $names = (Get-Item $path).GetValueNames()
     if ($names -notcontains "") { return $null }
     return (Get-Item $path).GetValue("")
+}
+
+if ($DryRun) {
+    Write-Host "would remove: $($ourProgIds -join ', '), the Open-with entries and the per-user icons"
+    Write-Host "(dry run, the registry was not touched)"
+    exit 0
 }
 
 foreach ($progId in $ourProgIds + @("ApkInfo.android", "ApkInfo.alpine")) {

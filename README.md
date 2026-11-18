@@ -102,8 +102,15 @@ git push origin v1.0.0        # 触发发布
 ### 文件关联
 
 ```powershell
-.\Register-FileAssociations.ps1     # 为当前用户注册 .apk / .apks
-.\Unregister-FileAssociations.ps1   # 撤销（带回滚备份）
+.\Register-FileAssociations.ps1              # 为当前用户注册 .apk / .apks / .apkm / .xapk
+.\Register-FileAssociations.ps1 -DryRun      # 只看会注册什么，不写注册表
+.\Unregister-FileAssociations.ps1            # 撤销（带回滚备份）
+```
+
+这两个脚本与 `icons\` 都打进 **release 压缩包**，解压后即可原地运行——它们会先找同目录的 `ApkInfo.exe`，再退回源码树的 `build\Release\ApkInfo.exe`，图标同样先找 `icons\` 再找 `assets\icons\`。从 GitHub 下载的包带"来自 Internet"标记，首次运行前可先解除：
+
+```powershell
+Get-ChildItem | Unblock-File
 ```
 
 资源管理器的文件类型图标只能按**扩展名**取，在打开文件之前就要给出，而 `.apk` 同时是 Android 与 Alpine，所以外壳图标保持"格式中立"，真正能区分的格式图标（绿包 / 青山 / 紫束）在**打开之后**切换窗口与任务栏图标。

@@ -1,4 +1,4 @@
-# Registers ApkInfo as the handler for package files (*per user*, no admin needed)
+﻿# Registers ApkInfo as the handler for package files (*per user*, no admin needed)
 # and gives Explorer the matching icons:
 #
 #   .apk              -> ApkInfo.apk  (blue document)
@@ -15,6 +15,11 @@
 #                                                      # per-user "always open
 #                                                      # with" record
 #   .\Register-FileAssociations.ps1 -Exe <path>        # register another build
+#   .\Register-FileAssociations.ps1 -DryRun            # show what would be registered
+#
+# The script works both from the source tree (ApkInfo.exe in build\Release, icons in
+# assets\icons) and from the release archive (ApkInfo.exe and icons\ beside it), so the
+# extracted release can register itself without a checkout.
 #
 # Windows 10/11 store the user's explicit "always open with" choice in a
 # hash-protected UserChoice (or UserChoiceLatest) record that scripts cannot
@@ -27,9 +32,10 @@
 # The previous default handlers are saved under HKCU\Software\ApkInfo\Backup and
 # restored by Unregister-FileAssociations.ps1.
 param(
-    [string]$Exe = (Join-Path $PSScriptRoot "build\Release\ApkInfo.exe"),
+    [string]$Exe,
     [switch]$OpenWithOnly,
-    [switch]$ReplaceUserChoice
+    [switch]$ReplaceUserChoice,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,18 +47,44 @@ public class ShellNotify {
 }
 "@
 
-if (-not (Test-Path $Exe)) { throw "ApkInfo.exe not found: $Exe - build it first (.\build.ps1)" }
+if (-not $Exe) {
+    foreach ($candidate in @((Join-Path $PSScriptRoot "ApkInfo.exe"),
+                             (Join-Path $PSScriptRoot "build\Release\ApkInfo.exe"),
+                             (Join-Path $PSScriptRoot "build-ninja\ApkInfo.exe"))) {
+        if (Test-Path $candidate) { $Exe = $candidate; break }
+    }
+}
+if (-not $Exe -or -not (Test-Path $Exe)) {
+    throw "ApkInfo.exe not found next to this script - pass -Exe <path> or build it first (.\build.ps1)"
+}
 $Exe = (Resolve-Path $Exe).Path
 
 # Icons are copied to a stable per-user location so the registration does not
 # break when the build directory is cleaned.
-$iconSource = Join-Path $PSScriptRoot "assets\icons"
+$iconSource = $null
+foreach ($candidate in @((Join-Path $PSScriptRoot "icons"),
+                         (Join-Path $PSScriptRoot "assets\icons"))) {
+    if (Test-Path (Join-Path $candidate "app.ico")) { $iconSource = $candidate; break }
+}
+if (-not $iconSource) {
+    throw "no icons found - expected an 'icons' or 'assets\icons' folder next to this script"
+}
 $iconDir = Join-Path $env:LOCALAPPDATA "ApkInfo\icons"
 New-Item -ItemType Directory -Force -Path $iconDir | Out-Null
 foreach ($name in "app", "apk", "apks", "android", "alpine") {
     $from = Join-Path $iconSource "$name.ico"
     if (-not (Test-Path $from)) { throw "missing icon: $from (run python tools\make_icons.py)" }
     Copy-Item $from (Join-Path $iconDir "$name.ico") -Force
+}
+
+if ($DryRun) {
+    Write-Host "ApkInfo.exe : $Exe"
+    Write-Host "icons from  : $iconSource"
+    Write-Host "icons to    : $iconDir"
+    foreach ($ext in @(".apk", ".apks", ".apkm", ".xapk")) {
+        Write-Host "would register $ext  (dry run, the registry was not touched)"
+    }
+    exit 0
 }
 
 $backupRoot = "HKCU:\Software\ApkInfo\Backup"
