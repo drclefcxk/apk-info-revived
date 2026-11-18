@@ -72,25 +72,42 @@ jobs:
       - name: Smoke test
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $exe = "build\Release\apkinfo-cli.exe"
           if (-not (Test-Path $exe)) { throw "missing $exe" }
 
-          # a synthetic Alpine v2 package: the parser must report it as such
+          # The CLI exits non-zero for input it cannot read; capture the exit code
+          # explicitly so it never becomes this step's exit code.
+          function Invoke-Cli([string]$target) {
+              $stdout = "$env:RUNNER_TEMP\cli-out.txt"
+              $stderr = "$env:RUNNER_TEMP\cli-err.txt"
+              & $exe $target > $stdout 2> $stderr
+              $code = $LASTEXITCODE
+              $text = (Get-Content $stdout -Raw -ErrorAction SilentlyContinue) +
+                      (Get-Content $stderr -Raw -ErrorAction SilentlyContinue)
+              Write-Host $text
+              return @{ Output = $text; Code = $code }
+          }
+
+          # a synthetic Alpine v2 package must be recognised
           Remove-Item smoke.apk -ErrorAction SilentlyContinue
           python tests\make_smoke_package.py smoke.apk
-          $out = & $exe smoke.apk 2>&1 | Out-String
-          Write-Host $out
-          if ($out -notmatch "Alpine package") { throw "the CLI did not recognise the synthetic package" }
-          if ($out -notmatch "smoke-test") { throw "the CLI did not read the package name" }
+          $pack = Invoke-Cli "smoke.apk"
+          if ($pack.Code -ne 0) { throw "the CLI exited $($pack.Code) on a valid package" }
+          if ($pack.Output -notmatch "Alpine package") { throw "the package was not detected as Alpine" }
+          if ($pack.Output -notmatch "smoke-test") { throw "the package name was not read" }
+          if ($pack.Output -notmatch "1\.0\.0-r0") { throw "the version was not read" }
 
-          # and something that is not a package at all
-          $out = & $exe README.md 2>&1 | Out-String
-          if ($out -notmatch "unrecognised") { throw "a plain file was not rejected" }
+          # a plain file must be rejected
+          $plain = Invoke-Cli "README.md"
+          if ($plain.Output -notmatch "unrecognised") { throw "a plain file was not rejected" }
 
-          # the viewer itself must start (it is created hidden by the harness, so just
-          # check that the binary links): the CLI shares its whole core
-          if (-not (Test-Path "build\Release\ApkInfo.exe")) { throw "missing ApkInfo.exe" }
-          if (-not (Test-Path "build\Release\slint_cpp.dll")) { throw "the Slint runtime was not deployed" }
+          # the viewer binary and its runtime must be there
+          foreach ($file in @("ApkInfo.exe", "slint_cpp.dll", "libwebp.dll", "zstd.dll")) {
+              if (-not (Test-Path "build\Release\$file")) { throw "missing build/Release/$file" }
+          }
+          Write-Host "smoke test passed"
+          exit 0
 
       - name: Package
         shell: pwsh
