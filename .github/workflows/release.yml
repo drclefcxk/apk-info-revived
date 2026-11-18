@@ -30,7 +30,9 @@ env:
 jobs:
   windows-x64:
     name: Windows x64
-    runs-on: windows-latest
+    # Pinned on purpose: windows-latest currently ships Visual Studio 2026, and the
+    # project's generator is "Visual Studio 17 2022".
+    runs-on: windows-2022
 
     steps:
       - name: Check out
@@ -54,15 +56,18 @@ jobs:
         shell: pwsh
         run: |
           $vcpkg = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkg) { $vcpkg = "C:\vcpkg" }
           Write-Host "vcpkg: $vcpkg"
           & "$vcpkg\vcpkg.exe" install zlib:x64-windows libwebp:x64-windows zstd:x64-windows --clean-after-build
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed ($LASTEXITCODE)" }
+          # build.ps1 reads VCPKG_ROOT; ${{ env.X }} cannot see the runner's variables
+          "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Build
         shell: pwsh
-        env:
-          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
-        run: .\build.ps1 -Clean
+        run: |
+          .\build.ps1 -Clean
+          if (-not (Test-Path "build\Release\ApkInfo.exe")) { throw "the build produced no ApkInfo.exe" }
 
       - name: Smoke test
         shell: pwsh
