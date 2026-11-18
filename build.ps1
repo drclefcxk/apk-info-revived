@@ -99,7 +99,10 @@ if (-not $NoDeploy) {
     if ($slintDir) {
         $groups += , @{ Name = "slint"; Dir = (Join-Path $slintDir "lib"); Patterns = @("slint_cpp.dll") }
     }
-    if ($vcpkg) {
+    # vcpkg's app-local deployment already copies the port DLLs for the configuration
+    # being built, and only it knows where the debug ones live: in a Debug build this
+    # step would otherwise drop the release libraries next to a debug executable.
+    if ($vcpkg -and $Configuration -ne "Debug") {
         $vcpkgBin = Join-Path $vcpkg "installed/x64-windows/bin"
         $groups += , @{ Name = "webp"; Dir = $vcpkgBin; Patterns = @("libwebp.dll", "libsharpyuv.dll") }
         $groups += , @{ Name = "zlib"; Dir = $vcpkgBin; Patterns = @("zlib*.dll", "libz*.dll", "z.dll") }
@@ -119,6 +122,8 @@ if (-not $NoDeploy) {
             continue
         }
         foreach ($file in $matches) {
+            # never ship a debug variant of a library
+            if ($file.Name -match '^(libwebpd|libwebpmuxd|libsharpyuvd|zlibd|zstdd)') { continue }
             Copy-Item -Path $file.FullName -Destination $outDir -Force
             $copied += $file.Name
         }

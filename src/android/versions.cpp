@@ -16,10 +16,19 @@ namespace apkinfo {
 namespace versions {
 namespace {
 
-constexpr const char* kFileName = "android-versions.txt";
+// The table as shipped, kept sorted by SDK so the generated file reads naturally.
+//
+// The entries are a plain struct of an int and a string literal rather than
+// AndroidVersion: a `constexpr` array of a type holding std::string is not a constant
+// expression in a Debug build (MSVC's checked iterators and debug allocator are not
+// constant-evaluable), which failed with C2131. AndroidVersion objects are built from
+// this table on first use instead.
+struct BuiltinVersion {
+    int sdk;
+    const char* name;
+};
 
-// The table as shipped. Kept sorted by SDK so the generated file reads naturally.
-constexpr AndroidVersion kBuiltin[] = {
+constexpr BuiltinVersion kBuiltin[] = {
     {1, "1.0"},   {2, "1.1"},  {3, "1.5"},    {4, "1.6"},   {5, "2.0"},   {6, "2.0.1"},
     {7, "2.1"},   {8, "2.2"},  {9, "2.3"},    {10, "2.3.3"}, {11, "3.0"}, {12, "3.1"},
     {13, "3.2"},  {14, "4.0"}, {15, "4.0.3"}, {16, "4.1"},  {17, "4.2"},  {18, "4.3"},
@@ -90,37 +99,16 @@ std::string executable_directory() {
 }
 
 std::span<const AndroidVersion> builtin_android_versions() {
-    return std::span<const AndroidVersion>(kBuiltin, std::size(kBuiltin));
-}
-
-std::string android_versions_path() {
-    const std::string directory = executable_directory();
-    if (directory.empty()) return {};
-    return directory + "\\" + kFileName;
-}
-
-std::string android_versions_file_text() {
-    std::string out;
-    out += "# APK Info - Revived: Android version names\n";
-    out += "#\n";
-    out += "# Maps an SDK level to the name shown after it, e.g.\n";
-    out += "#     34 14            ->  \"34 (Android 14)\"\n";
-    out += "#     36 16 (Baklava)  ->  \"36 (Android 16 (Baklava))\"\n";
-    out += "#\n";
-    out += "# One entry per line: the SDK level first, then the name (everything after\n";
-    out += "# the first space). Blank lines and lines starting with '#' are ignored, and\n";
-    out += "# a level that is not listed simply shows no name. Edit this file to teach\n";
-    out += "# the program about future Android releases - it is read on every start,\n";
-    out += "# so no rebuild is needed. Deleting the file restores the built-in table.\n";
-    out += "#\n";
-    out += "# This file lives next to ApkInfo.exe:\n";
-    out += "#     " + android_versions_path() + "\n";
-    out += "#\n";
-    out += "# sdk  name\n";
-    for (const AndroidVersion& entry : kBuiltin) {
-        out += std::to_string(entry.sdk) + " " + entry.name + "\n";
-    }
-    return out;
+    // Built once: the table never changes, and this keeps the constexpr array above POD.
+    static const std::vector<AndroidVersion> table = [] {
+        std::vector<AndroidVersion> versions;
+        versions.reserve(std::size(kBuiltin));
+        for (const BuiltinVersion& entry : kBuiltin) {
+            versions.push_back(AndroidVersion{entry.sdk, entry.name});
+        }
+        return versions;
+    }();
+    return table;
 }
 
 std::vector<AndroidVersion> parse_android_versions(std::string_view text) {
@@ -171,7 +159,7 @@ std::string lookup(int64_t sdk) {
     for (const auto& entry : current.android_versions) {
         if (entry.first == sdk) return entry.second;
     }
-    for (const AndroidVersion& entry : kBuiltin) {
+    for (const BuiltinVersion& entry : kBuiltin) {
         if (entry.sdk == sdk) return entry.name;
     }
     return {};
