@@ -61,7 +61,7 @@
 .\build.ps1 -Target apkinfo-cli
 ```
 
-`build.ps1` 会自动查找 Slint 与 vcpkg（`$env:SLINT_DIR`、`$env:VCPKG_ROOT`，然后 `D:\SDK\slint` / `D:\SDK\vcpkg`），传入 `-DSlint_DIR=<slint>/lib/cmake/Slint` 与 vcpkg toolchain，并把运行库（`slint_cpp.dll`、`libwebp.dll`、`zlib1.dll`、`zstd.dll`）复制到可执行文件旁。
+`build.ps1` 会自动查找 Slint 与 vcpkg（`$env:SLINT_DIR`、`$env:VCPKG_ROOT`，然后 `D:\SDK\slint` / `D:\SDK\vcpkg`），传入 `-DSlint_DIR=<slint>/lib/cmake/Slint` 与 vcpkg toolchain；构建完成后把运行库（`slint_cpp.dll`、`libwebp.dll`、`libsharpyuv.dll`、`zlib1.dll`、`zstd.dll`）复制到可执行文件旁，因此 `build\Release` 目录可以直接运行、也可以直接打包（`-NoDeploy` 可跳过这一步）。
 
 ### Visual Studio Code
 
@@ -76,6 +76,17 @@ CMake 构建目录与创建它的生成器绑定，若 CMake Tools 用 Ninja 建
 
 * `build\Release\ApkInfo.exe` — 查看器（可在命令行给一个包路径，或用 *打开包…*）
 * `build\Release\apkinfo-cli.exe` — 输出解析器找到的全部信息，用于脚本化回归（`--icon-out <目录>` 还会把图标写成 PNG）
+
+### 发布（GitHub Actions）
+
+`.github/workflows/release.yml` 在 `windows-latest` 上把本项目的构建流程重放一遍：静默安装 Slint C++、用 vcpkg 装三件套、`build.ps1 -Clean`、冒烟测试，然后把 `build\Release` 打包成 `APK-Info-Revived-<tag>-win64.zip` 并作为 Release 资产发布。
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0        # 触发发布
+```
+
+也可以在 Actions 页面手动 Run workflow（`tag` 默认 `v1.0.0`）。冒烟测试用 `tests/make_smoke_package.py` 现场生成一个最小 Alpine v2 包，断言 CLI 能识别它、并把普通文件判为"无法识别"，因此不需要任何样例包或 aapt2 工具链。
 
 ## 使用
 

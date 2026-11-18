@@ -1,0 +1,129 @@
+name: release
+
+# Builds the Windows x64 binaries and publishes them as a release.
+#
+#   * push a tag:      git tag v1.0.0 && git push origin v1.0.0
+#   * or run it by hand: Actions -> release -> Run workflow (the tag defaults to v1.0.0)
+#
+# The job mirrors a local build: Slint C++ (prebuilt, installed silently), the three
+# vcpkg ports, then .\build.ps1. The release archive is the build output directory
+# plus the licence and the two READMEs.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish under"
+        required: false
+        default: "v1.0.0"
+
+permissions:
+  contents: write
+
+env:
+  SLINT_VERSION: "1.13.1"
+  SLINT_DIR: "C:\\slint"
+
+jobs:
+  windows-x64:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Slint C++ ${{ env.SLINT_VERSION }}
+        shell: pwsh
+        run: |
+          $url = "https://github.com/slint-ui/slint/releases/download/v$env:SLINT_VERSION/Slint-cpp-$env:SLINT_VERSION-win64-MSVC-AMD64.exe"
+          Write-Host "downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile slint-installer.exe -UseBasicParsing
+          # NSIS: /S is silent, /D= must be last and unquoted
+          $process = Start-Process -FilePath .\slint-installer.exe -ArgumentList "/S", "/D=$env:SLINT_DIR" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Slint installer exited with $($process.ExitCode)" }
+          if (-not (Test-Path "$env:SLINT_DIR\lib\cmake\Slint\SlintConfig.cmake")) {
+            throw "Slint was not installed into $env:SLINT_DIR"
+          }
+          Write-Host "Slint ready in $env:SLINT_DIR"
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          $vcpkg = $env:VCPKG_INSTALLATION_ROOT
+          Write-Host "vcpkg: $vcpkg"
+          & "$vcpkg\vcpkg.exe" install zlib:x64-windows libwebp:x64-windows zstd:x64-windows --clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed ($LASTEXITCODE)" }
+
+      - name: Build
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
+        run: .\build.ps1 -Clean
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $exe = "build\Release\apkinfo-cli.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+
+          # a synthetic Alpine v2 package: the parser must report it as such
+          Remove-Item smoke.apk -ErrorAction SilentlyContinue
+          python tests\make_smoke_package.py smoke.apk
+          $out = & $exe smoke.apk 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch "Alpine package") { throw "the CLI did not recognise the synthetic package" }
+          if ($out -notmatch "smoke-test") { throw "the CLI did not read the package name" }
+
+          # and something that is not a package at all
+          $out = & $exe README.md 2>&1 | Out-String
+          if ($out -notmatch "unrecognised") { throw "a plain file was not rejected" }
+
+          # the viewer itself must start (it is created hidden by the harness, so just
+          # check that the binary links): the CLI shares its whole core
+          if (-not (Test-Path "build\Release\ApkInfo.exe")) { throw "missing ApkInfo.exe" }
+          if (-not (Test-Path "build\Release\slint_cpp.dll")) { throw "the Slint runtime was not deployed" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
+          if (-not $version) { $version = "v1.0.0" }
+          $name = "APK-Info-Revived-$version-win64"
+          $stage = Join-Path "dist" $name
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "build\Release\ApkInfo.exe" $stage
+          Copy-Item "build\Release\apkinfo-cli.exe" $stage
+          Copy-Item "build\Release\*.dll" $stage
+          Copy-Item "LICENSE", "README.md", "README.en.md" $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath "dist/$name.zip" -CompressionLevel Optimal
+          Get-ChildItem dist | Select-Object Name, Length
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ARCHIVE=dist/$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: APK-Info-Revived-win64
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: APK Info — Revived ${{ env.VERSION }}
+          files: ${{ env.ARCHIVE }}
+          generate_release_notes: true
+          body: |
+            Windows x64 build of APK Info — Revived.
+
+            `ApkInfo.exe` is the viewer, `apkinfo-cli.exe` dumps everything the parsers
+            found (for scripts and regression checks). The DLLs beside them are the
+            Slint runtime and the vcpkg libraries — keep the folder together.
+
+            Licensed under GPL-3.0-only; see `LICENSE`. The binaries link Slint's GPLv3
+            build, so they are distributed under GPL-3.0 as a whole.

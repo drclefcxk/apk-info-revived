@@ -89,7 +89,8 @@ Requirements:
 `build.ps1` finds Slint and vcpkg automatically (`$env:SLINT_DIR`, `$env:VCPKG_ROOT`,
 then `D:\SDK\slint` / `D:\SDK\vcpkg`), passes `-DSlint_DIR=<slint>/lib/cmake/Slint` plus
 the vcpkg toolchain, and copies the runtime DLLs (`slint_cpp.dll`, `libwebp.dll`,
-`zlib1.dll`, `zstd.dll`) next to the executables.
+`libsharpyuv.dll`, `zlib1.dll`, `zstd.dll`) next to the executables, so `build\Release` is
+directly runnable and directly packable (`-NoDeploy` skips that step).
 
 ### Visual Studio Code
 
@@ -111,6 +112,22 @@ Outputs:
   use *Open package…*)
 * `build\Release\apkinfo-cli.exe` — dumps everything the parsers found, for scripted
   regression checks (`--icon-out <dir>` also writes the extracted icon as PNG)
+
+### Releases (GitHub Actions)
+
+`.github/workflows/release.yml` replays the build on `windows-latest`: it installs Slint
+C++ silently, installs the three vcpkg ports, runs `build.ps1 -Clean`, smoke-tests the
+result and publishes `build\Release` as `APK-Info-Revived-<tag>-win64.zip` on a release.
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0        # triggers the release
+```
+
+The workflow can also be started by hand from the Actions tab (`tag` defaults to
+`v1.0.0`). The smoke test generates a minimal Alpine v2 package with
+`tests/make_smoke_package.py`, asserts the CLI recognises it and that a plain file is
+rejected — no sample packages or aapt2 toolchain needed.
 
 ## Using it
 

@@ -22,6 +22,9 @@ cmake_install.cmake
 android-versions.txt
 apkinfo-config.json
 
+dist/
+smoke.apk
+
 # ---------------------------------------------------------------- test artifacts
 tests/bin/
 tests/fixtures/
