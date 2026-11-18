@@ -89,28 +89,34 @@ $outDir = if (Test-Path (Join-Path $build $Configuration)) { Join-Path $build $C
 # The executables link slint_cpp.dll and the vcpkg ports dynamically, so a Windows
 # run needs those DLLs next to them. Copying them here keeps a local build and the
 # release archive identical (the release zip is exactly this directory).
+# Every library is matched by a group of candidate names: vcpkg has shipped zlib as
+# both zlib1.dll and z.dll depending on the port version.
 if (-not $NoDeploy) {
-    $runtime = @()
-    if ($slintDir) { $runtime += @(, (Join-Path $slintDir "lib/slint_cpp.dll")) }
+    $groups = @()
+    if ($slintDir) { $groups += , @{ Name = "slint"; Dir = (Join-Path $slintDir "lib"); Files = @("slint_cpp.dll") } }
     if ($vcpkg) {
         $vcpkgBin = Join-Path $vcpkg "installed/x64-windows/bin"
-        foreach ($name in @("libwebp.dll", "libsharpyuv.dll", "zlib1.dll", "zstd.dll")) {
-            $runtime += @(, (Join-Path $vcpkgBin $name))
-        }
+        $groups += , @{ Name = "webp"; Dir = $vcpkgBin; Files = @("libwebp.dll", "libsharpyuv.dll") }
+        $groups += , @{ Name = "zlib"; Dir = $vcpkgBin; Files = @("zlib1.dll", "z.dll") }
+        $groups += , @{ Name = "zstd"; Dir = $vcpkgBin; Files = @("zstd.dll") }
     }
     $copied = 0
     $missing = @()
-    foreach ($dll in $runtime) {
-        if (Test-Path $dll) {
-            Copy-Item -Path $dll -Destination $outDir -Force
-            $copied++
-        } else {
-            $missing += (Split-Path -Leaf $dll)
+    foreach ($group in $groups) {
+        $found = @()
+        foreach ($name in $group.Files) {
+            $candidate = Join-Path $group.Dir $name
+            if (Test-Path $candidate) {
+                Copy-Item -Path $candidate -Destination $outDir -Force
+                $copied++
+                $found += $name
+            }
         }
+        if ($found.Count -eq 0) { $missing += "$($group.Name) ($($group.Files -join '|'))" }
     }
     if ($copied -gt 0) { Write-Host "== runtime: $copied DLL(s) beside the executables ==" -ForegroundColor Cyan }
     if ($missing.Count -gt 0) {
-        Write-Host "warning: runtime DLL(s) not found: $($missing -join ', ')" -ForegroundColor Yellow
+        Write-Host "warning: no runtime DLL found for: $($missing -join ', ')" -ForegroundColor Yellow
     }
 }
 
