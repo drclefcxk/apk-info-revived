@@ -48,6 +48,7 @@ public class UiFlow {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
@@ -149,6 +150,25 @@ function Get-Lines([string]$path) {
         $lines += [pscustomobject]@{ Text = $line.Text; X = [int]$x0; Y = [int]$y0; W = [int]($x1 - $x0); H = [int]($y1 - $y0) }
     }
     return $lines
+}
+
+# OCR of a region, scaled up first: small button labels ("Save") are otherwise missed.
+function Get-Lines-Zoom([string]$path, [int]$x0, [int]$y0, [int]$x1, [int]$y1) {
+    $source = [System.Drawing.Image]::FromFile($path)
+    $width = $x1 - $x0
+    $height = $y1 - $y0
+    $scaled = New-Object System.Drawing.Bitmap(($width * 2), ($height * 2))
+    $graphics = [System.Drawing.Graphics]::FromImage($scaled)
+    $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $graphics.DrawImage($source, (New-Object System.Drawing.Rectangle(0, 0, ($width * 2), ($height * 2))),
+                        (New-Object System.Drawing.Rectangle($x0, $y0, $width, $height)),
+                        [System.Drawing.GraphicsUnit]::Pixel)
+    $graphics.Dispose()
+    $source.Dispose()
+    $zoomPath = Join-Path $OutDir "zoom.png"
+    $scaled.Save($zoomPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    $scaled.Dispose()
+    return Get-Lines $zoomPath
 }
 
 function Scroll-By([int]$screenX, [int]$screenY, [int]$notches) {
@@ -404,7 +424,7 @@ finally {
 $app = Start-App $Single
 try {
     $shot = Capture $app.Handle "20-toolbar"
-    $statusBefore = (Get-Lines $shot.Path) | Where-Object { $_.Y -gt 55 -and $_.Y -lt 95 -and $_.X -gt 400 -and $_.X -lt 780 } | Select-Object -First 1
+    $statusBefore = (Get-Lines $shot.Path) | Where-Object { $_.Y -gt 55 -and $_.Y -lt 95 -and $_.X -gt 200 -and $_.X -lt 450 } | Select-Object -First 1
     $toolLines = Get-Lines $shot.Path
     $copyAll = $toolLines | Where-Object { $_.Text -match "^Copy|^复\s*制" } | Select-Object -First 1
     Check ($null -ne $copyAll) "the 'Copy all' button is in the toolbar"
@@ -429,7 +449,7 @@ try {
         } | ForEach-Object { $_.Text }) -join " ")
         Check ($buttonTextAfter -ne $buttonTextBefore) `
               "the button itself shows the confirmation ('$buttonTextBefore' -> '$buttonTextAfter')"
-        $statusAfter = $flashLines | Where-Object { $_.Y -gt 55 -and $_.Y -lt 95 -and $_.X -gt 400 -and $_.X -lt 780 } | Select-Object -First 1
+        $statusAfter = $flashLines | Where-Object { $_.Y -gt 55 -and $_.Y -lt 95 -and $_.X -gt 200 -and $_.X -lt 450 } | Select-Object -First 1
         Check ($null -ne $statusBefore -and $null -ne $statusAfter -and $statusBefore.Text -eq $statusAfter.Text) `
               "the package information in the status bar is untouched"
 
@@ -545,39 +565,84 @@ if (Test-Path $cli) {
     }
 }
 
-# ------------------------------------------------- phase F: language dropdown
+# ------------------------------------------------- phase F: language in settings
+# The dropdown moved out of the toolbar: the language is now a setting, saved with the
+# rest of the settings page.
 $configFile = Join-Path (Split-Path -Parent $Exe) "apkinfo-config.json"
 $app = Start-App $Single
 try {
-    $shot = Capture $app.Handle "60-lang"
-    $lines = Get-Lines $shot.Path
-    # the first entry is localised ("跟随系统" / "Follow system") and OCR puts spaces
-    # between CJK characters, so match tolerantly
-    $combo = $lines | Where-Object { $_.Y -lt 95 -and $_.Text -match "系\s*统|System|中\s*文|English" } |
-             Select-Object -First 1
-    Check ($null -ne $combo) "the language dropdown is in the toolbar"
+    $shot = Capture $app.Handle "60-toolbar"
+    # The toolbar cluster is explicit geometry: copy(88) dump(88) export(104)
+    # install(96) reload(88) open(148) settings(88) with 10px gaps, pinned to the right
+    # edge at (client width / 1.25) - 778 logical pixels. OCR reliably misses the small
+    # secondary buttons, so the position is computed instead of guessed from text.
+    $client = New-Object UiFlow+RECT
+    [void][UiFlow]::GetClientRect($app.Handle, [ref]$client)
+    $scale = 1.25
+    $clusterStart = ($client.Right - $client.Left) / $scale - 778
+    $settingsX = [int]($shot.Rect.Left + ($clusterStart + 672 + 44) * $scale)
+    $settingsY = $shot.Rect.Top + 70
+    Check ($client.Right - $client.Left -gt 0) "the toolbar cluster is measurable"
 
-    if ($null -ne $combo) {
-        # open the dropdown and pick English
-        Click-Line $shot $combo $app.Handle
-        Start-Sleep -Milliseconds 600
-        $menuShot = Capture $app.Handle "61-menu"
-        $english = (Get-Lines $menuShot.Path) | Where-Object { $_.Text -match "^English$|English" } |
-                   Select-Object -Last 1
-        Check ($null -ne $english) "the dropdown lists the languages"
-        if ($null -ne $english) {
-            Click-Line $menuShot $english $app.Handle
-            Start-Sleep -Milliseconds 900
-            $after = Get-Lines (Capture $app.Handle "62-english").Path
-            $switched = @($after | Where-Object { $_.Text -match "Information|lnformation|Copy|DU?mp|Reload" })
-            Check ($switched.Count -ge 2) "picking English switches the UI ($($switched.Count) English labels)"
-            $saved = Get-Content $configFile -Raw -ErrorAction SilentlyContinue
-            Check ($null -ne $saved -and $saved -match '"language"\s*:\s*"en"') `
-                  "the choice is stored in apkinfo-config.json"
+    if ($true) {
+        Click-At $settingsX $settingsY $app.Handle
+        $page = [IntPtr]::Zero
+        $deadline = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $deadline -and $page -eq [IntPtr]::Zero) {
+            Start-Sleep -Milliseconds 400
+            foreach ($entry in (Get-AppWindows $app.Process.Id)) {
+                if ([IntPtr][int64](($entry -split '\|')[0]) -ne $app.Handle) {
+                    $page = [IntPtr][int64](($entry -split '\|')[0])
+                }
+            }
+        }
+        Check ($page -ne [IntPtr]::Zero) "the settings page opens"
+        if ($page -ne [IntPtr]::Zero) {
+            $pageShot = Capture $page "61-settings"
+            $pageLines = Get-Lines $pageShot.Path
+            $combo = $pageLines | Where-Object { $_.Text -match "跟\s*随\s*系\s*统|System|中\s*文|English|Deutsch" } |
+                     Select-Object -First 1
+            Check ($null -ne $combo) "the language selector is in the settings page"
+            if ($null -ne $combo) {
+                Click-Line $pageShot $combo $page
+                Start-Sleep -Milliseconds 700
+                $menuShot = Capture $page "62-language-menu"
+                $english = (Get-Lines $menuShot.Path) | Where-Object { $_.Text -match "English" } |
+                           Select-Object -Last 1
+                Check ($null -ne $english) "the selector lists the languages"
+                if ($null -ne $english) {
+                    Click-Line $menuShot $english $page
+                    Start-Sleep -Milliseconds 500
 
-            # and the control itself must show the pick, not stay on the first entry
-            $label = @($after | Where-Object { $_.Y -lt 95 -and $_.Text -match "English" })
-            Check ($label.Count -ge 1) "the dropdown shows the selected language (English)"
+                    # Save applies it: the page closes and the file records the choice
+                    $afterSave = Capture $page "63-saved"
+                    # the footer sits at the bottom; zoom it so the labels are readable
+                    $zoom = Get-Lines-Zoom $afterSave.Path 0 ($afterSave.Height - 90) $afterSave.Width $afterSave.Height
+                    # "保存" ocr's as "亻呆存", so the Save button is found as the one on
+                    # the same row as Cancel, to its left
+                    $cancel = $zoom | Where-Object { $_.Text -match "取\s*消|Cancel" } | Select-Object -First 1
+                    $save = $null
+                    if ($null -ne $cancel) {
+                        $save = $zoom |
+                                Where-Object { [Math]::Abs($_.Y - $cancel.Y) -lt 30 -and ($_.X + $_.W) -lt $cancel.X } |
+                                Sort-Object X | Select-Object -Last 1
+                    }
+                    Check ($null -ne $save) "the settings page has a Save button"
+                    if ($null -ne $save) {
+                        # the coordinates come from the 2x crop of the footer band
+                        $saveX = $afterSave.Rect.Left + [int](($save.X + $save.W / 2) / 2)
+                        $saveY = $afterSave.Rect.Top + ($afterSave.Height - 90) + [int](($save.Y + $save.H / 2) / 2)
+                        Click-At $saveX $saveY $page
+                        Start-Sleep -Milliseconds 1400
+                        $saved = Get-Content $configFile -Raw -ErrorAction SilentlyContinue
+                        Check ($null -ne $saved -and $saved -match '"language"\s*:\s*"en"') `
+                              "the choice is stored in apkinfo-config.json"
+                        $after = Get-Lines (Capture $app.Handle "64-english").Path
+                        $switched = @($after | Where-Object { $_.Text -match "Information|lnformation|Copy|DU?mp|Reload" })
+                        Check ($switched.Count -ge 2) "saving English re-renders the UI ($($switched.Count) English labels)"
+                    }
+                }
+            }
         }
     }
 }

@@ -6,7 +6,14 @@
 //     {
 //       "_readme": ["..."],
 //       "language": "auto",
-//       "androidVersions": { "34": "14", "35": "15" }
+//       "androidVersions": { "34": "14", "35": "15" },
+//       "install": {
+//         "adbPath": "",
+//         "android": { "mode": "builtin", "command": "adb install -r \"{path}\"" },
+//         "alpine":  { "command": "..." },
+//         "options": { "replace": true, "grant": false, "downgrade": false, "testPackages": false },
+//         "device": ""
+//       }
 //     }
 //
 // The file is created from the built-in defaults on first start. A hand-edited file
@@ -18,6 +25,8 @@
 #include <utility>
 #include <vector>
 
+#include "install.h"
+
 namespace apkinfo {
 
 // "auto" follows the Windows UI language; the others force one.
@@ -28,6 +37,8 @@ struct Config {
     // SDK level -> marketing name. Empty means "use the built-in table", which is
     // also what a config file with no androidVersions object means.
     std::vector<std::pair<int, std::string>> android_versions;
+    // What the "Install" button does (see src/install.h).
+    install::Settings install;
 };
 
 // Path of the config file: <exe dir>/apkinfo-config.json ("" when unknown).

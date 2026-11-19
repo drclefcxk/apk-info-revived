@@ -75,7 +75,69 @@ Config defaults() {
     for (const auto& entry : versions::builtin_android_versions()) {
         result.android_versions.emplace_back(entry.sdk, entry.name);
     }
+    result.install.android_mode = install::Mode::Builtin;
+    result.install.android_command = install::default_android_command();
+    result.install.alpine_command = install::default_alpine_command();
+    result.install.options.replace = true;
     return result;
+}
+
+const char* install_mode_code(install::Mode mode) {
+    return mode == install::Mode::Command ? "command" : "builtin";
+}
+
+// --- reading the install section -------------------------------------------
+void read_install(const json::Value& node, Config* config) {
+    if (!node.is_object()) return;
+    install::Settings& settings = config->install;
+
+    if (const json::Value* adb = node.find("adbPath")) settings.adb_path = adb->string_or(settings.adb_path);
+    if (const json::Value* device = node.find("device")) settings.device = device->string_or(settings.device);
+
+    if (const json::Value* android = node.find("android"); android && android->is_object()) {
+        if (const json::Value* mode = android->find("mode")) {
+            settings.android_mode =
+                mode->string_or("builtin") == "command" ? install::Mode::Command : install::Mode::Builtin;
+        }
+        if (const json::Value* command = android->find("command")) {
+            settings.android_command = command->string_or(settings.android_command);
+        }
+    }
+    if (const json::Value* alpine = node.find("alpine"); alpine && alpine->is_object()) {
+        // Alpine packages always go through the configured command.
+        if (const json::Value* command = alpine->find("command")) {
+            settings.alpine_command = command->string_or(settings.alpine_command);
+        }
+    }
+    if (const json::Value* options = node.find("options"); options && options->is_object()) {
+        if (const json::Value* value = options->find("replace")) settings.options.replace = value->bool_or(true);
+        if (const json::Value* value = options->find("grant")) settings.options.grant = value->bool_or(false);
+        if (const json::Value* value = options->find("downgrade")) settings.options.downgrade = value->bool_or(false);
+        if (const json::Value* value = options->find("testPackages")) {
+            settings.options.test_packages = value->bool_or(false);
+        }
+    }
+}
+
+// --- writing the install section -------------------------------------------
+void append_install(std::string* out, const install::Settings& settings) {
+    *out += "  \"install\": {\n";
+    *out += "    \"adbPath\": " + json::quote(settings.adb_path) + ",\n";
+    *out += "    \"android\": {\n";
+    *out += "      \"mode\": " + json::quote(install_mode_code(settings.android_mode)) + ",\n";
+    *out += "      \"command\": " + json::quote(settings.android_command) + "\n";
+    *out += "    },\n";
+    *out += "    \"alpine\": {\n";
+    *out += "      \"command\": " + json::quote(settings.alpine_command) + "\n";
+    *out += "    },\n";
+    *out += "    \"options\": {\n";
+    *out += std::string("      \"replace\": ") + (settings.options.replace ? "true" : "false") + ",\n";
+    *out += std::string("      \"grant\": ") + (settings.options.grant ? "true" : "false") + ",\n";
+    *out += std::string("      \"downgrade\": ") + (settings.options.downgrade ? "true" : "false") + ",\n";
+    *out += std::string("      \"testPackages\": ") + (settings.options.test_packages ? "true" : "false") + "\n";
+    *out += "    },\n";
+    *out += "    \"device\": " + json::quote(settings.device) + "\n";
+    *out += "  },\n";
 }
 
 // Reads the pre-JSON table (one "<sdk> <name>" per line), so a user who edited it
@@ -125,18 +187,24 @@ std::string config_path() {
     return directory + "\\" + kConfigFileName;
 }
 
-std::string config_file_text() {
-    const Config current = defaults();
+namespace {
+
+std::string write_document(const Config& current, bool with_path_note) {
     std::string out;
     out += "{\n";
     out += "  \"_readme\": [\n";
     out += "    \"APK Info - Revived configuration. Edit the values below; the file is read on every start.\",\n";
     out += "    \"language: \\\"auto\\\" follows the Windows UI language, or force \\\"en\\\" / \\\"zh\\\".\",\n";
     out += "    \"androidVersions: SDK level -> the name shown after it, e.g. \\\"36\\\": \\\"16 (Baklava)\\\".\",\n";
-    out += "    \"Add future Android releases here - no rebuild needed. Delete the file to restore defaults.\",\n";
-    out += "    \"This file lives next to ApkInfo.exe: " + config_path() + "\"\n";
-    out += "  ],\n";
-    out += "  \"language\": \"auto\",\n";
+    out += "    \"install.android.mode: \\\"builtin\\\" uses the install page, \\\"command\\\" runs the command.\",\n";
+    out += "    \"install.*.command: placeholders {path} {dir} {file_name} {base_name} {extension} {size}\",\n";
+    out += "    \"  {kind} {app_name} {package_name} {version} {version_code} {arch} {device} {adb}.\",\n";
+    out += "    \"Add future Android releases here - no rebuild needed. Delete the file to restore defaults.\"";
+    if (with_path_note) {
+        out += ",\n    " + json::quote("This file lives next to ApkInfo.exe: " + config_path());
+    }
+    out += "\n  ],\n";
+    out += "  \"language\": " + std::string(json::quote(language_preference_code(current.language))) + ",\n";
     out += "  \"androidVersions\": {\n";
     for (size_t i = 0; i < current.android_versions.size(); ++i) {
         const auto& entry = current.android_versions[i];
@@ -144,10 +212,16 @@ std::string config_file_text() {
         if (i + 1 < current.android_versions.size()) out += ",";
         out += "\n";
     }
-    out += "  }\n";
+    out += "  },\n";
+    append_install(&out, current.install);
+    out = out.substr(0, out.size() - 2) + "\n";  // the last section ends without a comma
     out += "}\n";
     return out;
 }
+
+}  // namespace
+
+std::string config_file_text() { return write_document(defaults(), true); }
 
 const char* language_preference_code(LanguagePreference preference) {
     switch (preference) {
@@ -225,6 +299,10 @@ const Config& config() {
         }
     }
 
+    if (const json::Value* install_node = document->find("install")) {
+        read_install(*install_node, &current.config);
+    }
+
     if (const json::Value* table = document->find("androidVersions")) {
         if (table->is_object()) {
             std::vector<std::pair<int, std::string>> entries;
@@ -265,26 +343,7 @@ Config& mutable_config() {
 bool save_config() {
     const std::string path = config_path();
     if (path.empty()) return false;
-    const Config& current = state().config;
-    std::string out;
-    out += "{\n";
-    out += "  \"_readme\": [\n";
-    out += "    \"APK Info - Revived configuration. Edit the values below; the file is read on every start.\",\n";
-    out += "    \"language: \\\"auto\\\" follows the Windows UI language, or force \\\"en\\\" / \\\"zh\\\".\",\n";
-    out += "    \"androidVersions: SDK level -> the name shown after it, e.g. \\\"36\\\": \\\"16 (Baklava)\\\".\",\n";
-    out += "    \"Add future Android releases here - no rebuild needed. Delete the file to restore defaults.\"\n";
-    out += "  ],\n";
-    out += "  \"language\": " + json::quote(language_preference_code(current.language)) + ",\n";
-    out += "  \"androidVersions\": {\n";
-    for (size_t i = 0; i < current.android_versions.size(); ++i) {
-        const auto& entry = current.android_versions[i];
-        out += "    \"" + std::to_string(entry.first) + "\": " + json::quote(entry.second);
-        if (i + 1 < current.android_versions.size()) out += ",";
-        out += "\n";
-    }
-    out += "  }\n";
-    out += "}\n";
-    return write_file(path, out);
+    return write_file(path, write_document(state().config, false));
 }
 
 void reload_config() {

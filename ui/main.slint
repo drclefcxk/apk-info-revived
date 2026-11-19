@@ -16,7 +16,7 @@
 //    text box (selectable, Ctrl+C, own scrollbar).
 //  * The Contents tab is a collapsed tree: only visible nodes become rows, which
 //    is what keeps a 20000 entry package responsive.
-import { VerticalBox, HorizontalBox, Button, ScrollView, ListView, TextEdit, ComboBox } from "std-widgets.slint";
+import { VerticalBox, HorizontalBox, Button, ScrollView, ListView, TextEdit, LineEdit, CheckBox, ComboBox } from "std-widgets.slint";
 
 // Kind: 0 = section header, 1 = label / value row, 2 = full width monospace line,
 //       4 = "show all" button, 5 = file tree node, 6 = split bundle member
@@ -29,6 +29,14 @@ export struct InfoRowItem {
     indent: int,
     toggle: int,
     payload: int,
+}
+
+// One selectable device on the install page.
+export struct DeviceItem {
+    label: string,   // "Pixel 7  (emulator-5554)  ·  device"
+    serial: string,
+    state: string,
+    usable: bool,    // state == "device"
 }
 
 // A toolbar button that never touches the bar edges: the container fills the
@@ -192,6 +200,7 @@ export component MainWindow inherits Window {
     in-out property <image> app-icon;
     in-out property <bool> has-icon: false;
     in-out property <bool> has-error: false;
+    in-out property <bool> has-install-target: false;
     in-out property <string> error-text;
     in-out property <[string]> warnings;
     in-out property <int> tab: 0;
@@ -202,16 +211,16 @@ export component MainWindow inherits Window {
     in-out property <string> label-information: "Information";
     in-out property <string> label-notes: "Notes";
     in-out property <string> label-no-preview: "no preview";
-    // language dropdown: index 0 = follow the system, 1 = 中文, 2 = English
-    in-out property <int> language-index: 0;
-    in-out property <[string]> language-options: ["跟随系统 / System", "中文", "English"];
     in-out property <string> label-copy-all: "Copy all";
+    in-out property <string> label-install: "Install";
+    in-out property <string> label-settings: "Settings";
     in-out property <string> label-dump: "Dump…";
     in-out property <string> label-export-icon: "Export icon…";
 
     callback open-requested();
     callback reload-requested();
-    callback language-selected(int);
+    callback install-requested();
+    callback settings-requested();
     callback copy-all-requested();
     callback dump-requested();
     callback export-icon-requested();
@@ -235,7 +244,7 @@ export component MainWindow inherits Window {
             Rectangle {
                 x: 18px;
                 y: 0px;
-                width: parent.width - 18px - 800px;
+                width: parent.width - 18px - 814px;
                 height: 100%;
                 background: transparent;
                 HorizontalLayout {
@@ -265,31 +274,14 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // right: language / copy / dump / export / reload / open
-            // (180 + 88 + 88 + 104 + 88 + 148 + 5*10 = 746)
+            // right: copy / dump / export / install / reload / open / settings
+            // (88 + 88 + 104 + 96 + 88 + 148 + 88 + 6*10 = 760)
             HorizontalLayout {
-                x: parent.width - 764px;
+                x: parent.width - 778px;
                 y: 0px;
-                width: 746px;
+                width: 760px;
                 height: 100%;
                 spacing: 10px;
-                // The dropdown replaces the old toggle: "follow the system" is the
-                // default, and the choice is stored in apkinfo-config.json.
-                VerticalLayout {
-                    width: 180px;
-                    alignment: center;
-
-                    // The model is constant and bilingual on purpose: replacing it on a
-                    // language change made the control reset current-index to the first
-                    // entry, which is what made the dropdown look stuck on "follow the
-                    // system". A two-way binding on current-index would be the other way to
-                    // keep them in sync, but this widget turns that into a binding loop.
-                    ComboBox {
-                        model: root.language-options;
-                        current-index: root.language-index;
-                        selected(value) => { root.language-selected(self.current-index); }
-                    }
-                }
                 ToolbarButton {
                     width: 88px;
                     text: root.label-copy-all;
@@ -307,6 +299,13 @@ export component MainWindow inherits Window {
                     clicked => { root.export-icon-requested(); }
                 }
                 ToolbarButton {
+                    width: 96px;
+                    text: root.label-install;
+                    primary: root.has-install-target;
+                    actionable: root.has-install-target;
+                    clicked => { root.install-requested(); }
+                }
+                ToolbarButton {
                     width: 88px;
                     text: root.label-reload;
                     clicked => { root.reload-requested(); }
@@ -316,6 +315,11 @@ export component MainWindow inherits Window {
                     text: root.label-open;
                     primary: true;
                     clicked => { root.open-requested(); }
+                }
+                ToolbarButton {
+                    width: 88px;
+                    text: root.label-settings;
+                    clicked => { root.settings-requested(); }
                 }
             }
         }
@@ -642,6 +646,724 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+// InstallWindow and SettingsWindow, appended to ui/main.slint.
+//
+// InstallWindow is the Android built-in installer: pick a device, optionally pair or
+// connect over Wi-Fi, choose the install options and watch the adb output. Alpine
+// packages never open it - they always run the command configured in the settings.
+//
+// SettingsWindow holds the language (it used to live in the toolbar), the install
+// behaviour for both package worlds, the adb path and the placeholder reference.
+
+export component InstallWindow inherits Window {
+    title: root.window-title;
+    preferred-width: 980px;
+    preferred-height: 700px;
+    min-width: 760px;
+    min-height: 520px;
+    background: #f5f6f8;
+
+    in-out property <string> window-title: "Install";
+    in-out property <string> package-line;    // "Lawnchair · 1.0.0 · com.example"
+    in-out property <string> adb-line;        // where adb was found (or "not found")
+    in-out property <string> device-hint;     // "Selected: ..." / "no device selected"
+    in-out property <[DeviceItem]> devices;
+    in-out property <int> device-index: -1;
+    in-out property <string> endpoint;
+    in-out property <string> pairing-code;
+    in-out property <string> mdns-text;
+    in-out property <string> log-text;
+    in-out property <bool> busy: false;
+    in-out property <bool> replace: true;
+    in-out property <bool> grant: false;
+    in-out property <bool> downgrade: false;
+
+    // localised chrome (pushed in from C++)
+    in-out property <string> label-devices: "Devices";
+    in-out property <string> label-refresh: "Refresh";
+    in-out property <string> label-discover: "Discover";
+    in-out property <string> label-wireless: "Wireless debugging";
+    in-out property <string> label-endpoint: "Address (host:port)";
+    in-out property <string> label-code: "Pairing code";
+    in-out property <string> label-connect: "Connect";
+    in-out property <string> label-disconnect: "Disconnect";
+    in-out property <string> label-pair: "Pair";
+    in-out property <string> label-options: "Install options";
+    in-out property <string> label-replace: "Replace existing (-r)";
+    in-out property <string> label-grant: "Grant all permissions (-g)";
+    in-out property <string> label-downgrade: "Allow downgrade (-d)";
+    in-out property <string> label-log: "adb output";
+    in-out property <string> label-install: "Install";
+    in-out property <string> label-close: "Close";
+    in-out property <string> label-empty: "No device - connect one, or pair over Wi-Fi";
+    in-out property <string> hint-endpoint: "192.168.1.5:5555";
+    in-out property <string> hint-code: "6-digit code";
+
+    callback refresh-requested();
+    callback discover-requested();
+    callback connect-requested();
+    callback disconnect-requested();
+    callback pair-requested();
+    callback install-requested();
+    callback close-requested();
+    callback device-selected(int);
+    callback endpoint-edited(string);
+    callback code-edited(string);
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // ------------------------------------------------------------ header
+        Rectangle {
+            height: 46px;
+            background: #ffffff;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 10px;
+                spacing: 12px;
+                alignment: center;
+                Text {
+                    text: root.window-title;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #1d2330;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.package-line;
+                    font-size: 12px;
+                    color: #6b7480;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                if root.busy: Text {
+                    text: "⏳";
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                StripButton {
+                    width: 88px;
+                    text: root.label-close;
+                    clicked => { root.close-requested(); }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #e3e6ea; }
+
+        // -------------------------------------------------------------- body
+        HorizontalLayout {
+            spacing: 12px;
+            padding: 12px;
+
+            // ---- left: devices + wireless
+            VerticalBox {
+                width: 380px;
+                spacing: 10px;
+
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        HorizontalLayout {
+                            height: 22px;
+                            Text {
+                                text: root.label-devices;
+                                font-size: 12px;
+                                font-weight: 700;
+                                color: #6b7480;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: root.device-hint;
+                                font-size: 11px;
+                                color: #8b95a3;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        Rectangle {
+                            height: 176px;
+                            background: #fafbfc;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: #eceff3;
+
+                            if root.devices.length == 0: Text {
+                                text: root.label-empty;
+                                font-size: 12px;
+                                color: #a6aebb;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                            ListView {
+                                for device[index] in root.devices: Rectangle {
+                                    height: 30px;
+                                    background: index == root.device-index ? #e8effc : transparent;
+
+                                    Text {
+                                        x: 10px;
+                                        width: parent.width - 20px;
+                                        height: 100%;
+                                        text: (index == root.device-index ? "◉  " : "○  ") + device.label;
+                                        font-size: 12px;
+                                        color: device.usable ? #1d2330 : #98a1ae;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.device-selected(index); }
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            height: 32px;
+                            spacing: 8px;
+                            StripButton {
+                                width: 96px;
+                                text: root.label-refresh;
+                                clicked => { root.refresh-requested(); }
+                            }
+                            StripButton {
+                                width: 104px;
+                                text: root.label-discover;
+                                clicked => { root.discover-requested(); }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text {
+                            height: 20px;
+                            text: root.label-wireless;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: center;
+                        }
+                        HorizontalLayout {
+                            height: 30px;
+                            spacing: 6px;
+                            Text {
+                                width: 120px;
+                                text: root.label-endpoint;
+                                font-size: 12px;
+                                color: #74808f;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text: root.endpoint;
+                                placeholder-text: root.hint-endpoint;
+                                edited(text) => { root.endpoint-edited(text); }
+                            }
+                        }
+                        HorizontalLayout {
+                            height: 30px;
+                            spacing: 6px;
+                            Text {
+                                width: 120px;
+                                text: root.label-code;
+                                font-size: 12px;
+                                color: #74808f;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text: root.pairing-code;
+                                placeholder-text: root.hint-code;
+                                edited(text) => { root.code-edited(text); }
+                            }
+                        }
+                        HorizontalLayout {
+                            height: 32px;
+                            spacing: 8px;
+                            StripButton {
+                                width: 84px;
+                                text: root.label-connect;
+                                clicked => { root.connect-requested(); }
+                            }
+                            StripButton {
+                                width: 96px;
+                                text: root.label-disconnect;
+                                clicked => { root.disconnect-requested(); }
+                            }
+                            StripButton {
+                                width: 72px;
+                                text: root.label-pair;
+                                clicked => { root.pair-requested(); }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        Text {
+                            text: root.mdns-text;
+                            font-size: 11px;
+                            color: #8b95a3;
+                            wrap: word-wrap;
+                            visible: root.mdns-text != "";
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+
+                Rectangle {
+                    height: 40px;
+                    background: transparent;
+                    Text {
+                        x: 4px;
+                        width: 372px;
+                        height: 100%;
+                        text: root.adb-line;
+                        font-size: 11px;
+                        color: #8b95a3;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            // ---- right: options + log + actions
+            Rectangle {
+                horizontal-stretch: 1;
+                background: #ffffff;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #e3e6ea;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+                    Text {
+                        height: 20px;
+                        text: root.label-options;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #6b7480;
+                        vertical-alignment: center;
+                    }
+                    HorizontalLayout {
+                        height: 28px;
+                        spacing: 14px;
+                        CheckBox {
+                            text: root.label-replace;
+                            checked: root.replace;
+                            toggled() => { root.replace = self.checked; }
+                        }
+                        CheckBox {
+                            text: root.label-grant;
+                            checked: root.grant;
+                            toggled() => { root.grant = self.checked; }
+                        }
+                        CheckBox {
+                            text: root.label-downgrade;
+                            checked: root.downgrade;
+                            toggled() => { root.downgrade = self.checked; }
+                        }
+                    }
+
+                    Text {
+                        height: 20px;
+                        text: root.label-log;
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: #6b7480;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: #fbfcfd;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: #eceff3;
+                        log := TextEdit {
+                            x: 8px;
+                            y: 6px;
+                            width: parent.width - 16px;
+                            height: parent.height - 12px;
+                            text: root.log-text;
+                            read-only: true;
+                            wrap: word-wrap;
+                            font-size: 12px;
+                        }
+                    }
+                    HorizontalLayout {
+                        height: 34px;
+                        spacing: 8px;
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        StripButton {
+                            width: 120px;
+                            text: root.label-install;
+                            clicked => { root.install-requested(); }
+                        }
+                        StripButton {
+                            width: 88px;
+                            text: root.label-close;
+                            clicked => { root.close-requested(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: root.window-title;
+    preferred-width: 860px;
+    preferred-height: 720px;
+    min-width: 720px;
+    min-height: 520px;
+    background: #f5f6f8;
+
+    in-out property <string> window-title: "Settings";
+    // language: 0 = follow the system, 1 = 中文, 2 = English (constant, bilingual list:
+    // a replaced model makes the ComboBox reset its selection)
+    in-out property <int> language-index: 0;
+    in-out property <[string]> language-options: ["跟随系统 / System", "中文", "English"];
+    // install behaviour
+    in-out property <int> android-mode-index: 0;  // 0 = built-in, 1 = command
+    in-out property <[string]> android-mode-options: ["内置安装器 / Built-in", "外部命令 / Command line"];
+    in-out property <string> android-command;
+    in-out property <string> alpine-command;
+    in-out property <string> adb-path;
+    in-out property <string> placeholder-help;
+    in-out property <string> preview-text;
+    in-out property <string> note-text;
+
+    in-out property <string> label-language-section: "Language";
+    in-out property <string> label-language: "Interface language";
+    in-out property <string> label-android-section: "Install button - Android packages";
+    in-out property <string> label-android-mode: "Install method";
+    in-out property <string> label-android-command: "Command line";
+    in-out property <string> label-alpine-section: "Install button - Alpine packages";
+    in-out property <string> label-alpine-command: "Command line";
+    in-out property <string> label-adb: "adb path (empty = search PATH and the SDK)";
+    in-out property <string> label-placeholders: "Placeholders";
+    in-out property <string> label-preview: "Preview for the open package";
+    in-out property <string> label-save: "Save";
+    in-out property <string> label-cancel: "Cancel";
+
+    callback save-requested();
+    callback cancel-requested();
+    callback android-command-edited(string);
+    callback alpine-command-edited(string);
+    callback adb-path-edited(string);
+
+    VerticalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            height: 46px;
+            background: #ffffff;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 10px;
+                spacing: 12px;
+                alignment: center;
+                Text {
+                    text: root.window-title;
+                    font-size: 14px;
+                    font-weight: 700;
+                    color: #1d2330;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                StripButton {
+                    width: 88px;
+                    text: root.label-cancel;
+                    clicked => { root.cancel-requested(); }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #e3e6ea; }
+
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-width: self.width;
+            viewport-height: content.preferred-height;
+
+            content := VerticalLayout {
+                padding: 14px;
+                spacing: 12px;
+
+                // -------- language
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text {
+                            height: 20px;
+                            text: root.label-language-section;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: center;
+                        }
+                        HorizontalLayout {
+                            height: 30px;
+                            spacing: 8px;
+                            Text {
+                                width: 320px;
+                                text: root.label-language;
+                                font-size: 13px;
+                                color: #1d2330;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                width: 220px;
+                                alignment: center;
+                                ComboBox {
+                                    model: root.language-options;
+                                    current-index: root.language-index;
+                                    selected(value) => { root.language-index = self.current-index; }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                    }
+                }
+
+                // -------- android
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text {
+                            height: 20px;
+                            text: root.label-android-section;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: center;
+                        }
+                        HorizontalLayout {
+                            height: 30px;
+                            spacing: 8px;
+                            Text {
+                                width: 320px;
+                                text: root.label-android-mode;
+                                font-size: 13px;
+                                color: #1d2330;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                width: 260px;
+                                alignment: center;
+                                ComboBox {
+                                    model: root.android-mode-options;
+                                    current-index: root.android-mode-index;
+                                    selected(value) => { root.android-mode-index = self.current-index; }
+                                }
+                            }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        Text {
+                            height: 20px;
+                            text: root.label-android-command;
+                            font-size: 12px;
+                            color: #74808f;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            height: 62px;
+                            background: #fbfcfd;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: #eceff3;
+                            LineEdit {
+                                x: 8px;
+                                width: parent.width - 16px;
+                                height: 26px;
+                                y: (parent.height - self.height) / 2;
+                                text: root.android-command;
+                                font-size: 12px;
+                                edited(text) => { root.android-command-edited(text); }
+                            }
+                        }
+                    }
+                }
+
+                // -------- alpine
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text {
+                            height: 20px;
+                            text: root.label-alpine-section;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            height: 20px;
+                            text: root.label-alpine-command;
+                            font-size: 12px;
+                            color: #74808f;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            height: 62px;
+                            background: #fbfcfd;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: #eceff3;
+                            LineEdit {
+                                x: 8px;
+                                width: parent.width - 16px;
+                                height: 26px;
+                                y: (parent.height - self.height) / 2;
+                                text: root.alpine-command;
+                                font-size: 12px;
+                                edited(text) => { root.alpine-command-edited(text); }
+                            }
+                        }
+                        Text {
+                            height: 20px;
+                            text: root.label-adb;
+                            font-size: 12px;
+                            color: #74808f;
+                            vertical-alignment: center;
+                        }
+                        HorizontalLayout {
+                            height: 30px;
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text: root.adb-path;
+                                placeholder-text: "C:\\platform-tools\\adb.exe";
+                                edited(text) => { root.adb-path-edited(text); }
+                            }
+                        }
+                    }
+                }
+
+                // -------- placeholder reference
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text {
+                            height: 20px;
+                            text: root.label-placeholders;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: center;
+                        }
+                        // Fourteen entries do not fit a card, so the list scrolls on
+                        // its own and the footer stays where it is.
+                        ScrollView {
+                            height: 190px;
+                            viewport-width: self.width;
+                            viewport-height: help.preferred-height;
+
+                            help := Text {
+                                width: parent.width - 12px;
+                                text: root.placeholder-help;
+                                font-size: 12px;
+                                color: #4b5563;
+                                font-family: "Consolas";
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                // -------- preview
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text {
+                            height: 20px;
+                            text: root.label-preview;
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.preview-text;
+                            font-size: 12px;
+                            color: #1d2330;
+                            font-family: "Consolas";
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.note-text;
+                            font-size: 11px;
+                            color: #8b95a3;
+                            wrap: word-wrap;
+                            visible: root.note-text != "";
+                        }
+                    }
+                }
+
+            }
+        }
+
+        Rectangle { height: 1px; background: #e3e6ea; }
+        Rectangle {
+            height: 56px;
+            background: #ffffff;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 8px;
+                alignment: center;
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                StripButton {
+                    width: 110px;
+                    text: root.label-save;
+                    clicked => { root.save-requested(); }
+                }
+                StripButton {
+                    width: 100px;
+                    text: root.label-cancel;
+                    clicked => { root.cancel-requested(); }
                 }
             }
         }

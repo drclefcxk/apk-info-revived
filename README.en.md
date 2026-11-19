@@ -49,7 +49,11 @@ default (see [Localisation](#localisation)).
 * **Large packages stay responsive**: the document is parsed once; switching language,
   expanding the tree and copying the report all re-render instead of re-reading the file.
 * **Bilingual UI**: English / Chinese, following the system language by default, switchable
-  from a toolbar dropdown that remembers the choice.
+  in the settings page, which remembers the choice.
+* **One-click install**: the toolbar's *Install* button sends the open package to a device -
+  Android packages through the built-in install page (device list, wireless debugging,
+  pairing, install options, adb log) or through a command line of your own; Alpine packages
+  always use the command line.
 * **`apkinfo-config.json`** holds the language preference and the Android version-name
   table; edits take effect on the next start, no rebuild needed.
 
@@ -63,8 +67,10 @@ Everything is parsed from the file itself: **no aapt, no 7z, no network.**
 | the main window: icon and app summary on the left, sections on the right (follows the system language) | the same window in English; the dropdown follows with *Follow system* |
 | ![long list](docs/screenshots/rows-with-show-all-zh.png) | ![viewer](docs/screenshots/viewer-zh.png) |
 | a long list renders its first 8 entries, then a `Show all (403)` button | the button opens a window with the whole list in one selectable text box |
-| ![tree](docs/screenshots/tree-zh.png) | ![language dropdown](docs/screenshots/language-menu-zh.png) |
-| the file listing is a collapsed tree (26 rows out of 10 561 entries); a click expands a directory | the language dropdown: follow the system / 中文 / English |
+| ![tree](docs/screenshots/tree-zh.png) | ![install page](docs/screenshots/install-page-zh.png) |
+| the file listing is a collapsed tree (26 rows out of 10 561 entries); a click expands a directory | the install page: devices, wireless debugging and pairing, install options, adb output (device names are illustrative) |
+| ![settings](docs/screenshots/settings-zh.png) | |
+| the settings page: language, the Android install method and command, the Alpine command, the adb path, the placeholder reference | |
 | ![Alpine noarch](docs/screenshots/alpine-noarch-zh.png) | ![Alpine x86_64](docs/screenshots/alpine-x86_64-zh.png) |
 | an Alpine package: `noarch`, architecture-independent (an OpenWrt LuCI module) | an Alpine package: `x86_64`, v2 tar format (the official busybox) |
 | ![Alpine aarch64](docs/screenshots/alpine-aarch64-zh.png) | ![Alpine file index](docs/screenshots/alpine-tree-zh.png) |
@@ -105,6 +111,26 @@ used previously"*. It now detects that (and recreates the directory by itself); 
 selecting the `vs2022` preset in VS Code keeps both workflows on the same directory.
 `.\build.ps1 -Generator Ninja -BinDir build-ninja` builds the Ninja variant from the
 command line.
+
+#### clangd
+
+clangd reads nothing from an MSVC build tree; it reads a **compilation database**,
+`compile_commands.json`. The Visual Studio generator cannot produce one, so the
+`ninja` preset turns on `CMAKE_EXPORT_COMPILE_COMMANDS` and the `.clangd` file at the
+repository root points clangd at `build-ninja/`:
+
+```powershell
+# once, from an "x64 Native Tools Command Prompt for VS 2022" (cl.exe must be on PATH)
+cmake --preset ninja
+cmake --build build-ninja        # also generates Slint's main.h
+```
+
+After that `#include <slint.h>`, `<string>` and `<windows.h>` all resolve in `src/*.cpp`:
+the Slint include directory comes from the `Slint::Slint` target, and the MSVC/Windows
+SDK system headers — which normally exist only in `cl.exe`'s `INCLUDE` variable, which
+clangd does not inherit — are written into the database as external includes by
+`CMakeLists.txt`. Configuring the `ninja` preset from VS Code works the same way, since
+CMake Tools sets up the Visual Studio environment itself.
 
 Outputs:
 
@@ -169,6 +195,82 @@ icons therefore stay format-neutral, and the format-specific icons (green packag
 mountain / purple bundle) switch the **window and taskbar icon** once a package is
 opened.
 
+## Installing
+
+The toolbar's **Install** button follows the settings:
+
+| package | setting | what happens |
+|---|---|---|
+| Android (`.apk` / `.apks` / `.apkm` / `.xapk`) | built-in installer (default) | the install page opens |
+| Android | external command | the command runs with the placeholders expanded; its output opens in a window |
+| Alpine | external command (the only option) | the same | 
+
+### The install page
+
+* **Device list**: whatever `adb devices -l` reports, including `unauthorized` and
+  `offline` (greyed out and not selectable); *Refresh* re-reads it.
+* **Discover**: `adb mdns services` lists the devices on the LAN that have wireless
+  debugging on, and fills the address field (the pairing endpoint first).
+* **Wireless debugging**: an address (`host:port`) and the 6-digit pairing code, with
+  *Connect* / *Disconnect* / *Pair*.
+* **Install options**: `-r` replace, `-g` grant all permissions, `-d` allow downgrade.
+* **adb output**: every command and adb's raw output is appended to a selectable log.
+* A bundle (`.apks` / `.apkm` / `.xapk`) is unpacked first - `base.apk` plus the
+  `split_*.apk` members, `base.apk` first - and installed with `adb install-multiple`;
+  the temporary directory is removed afterwards.
+* Every adb call runs on a worker thread, so installing a large package never freezes
+  the window.
+
+adb is looked up in `install.adbPath`, then `%ADB%`, `PATH`,
+`%ANDROID_HOME%`/`%ANDROID_SDK_ROOT%` and the usual SDK folders. When it cannot be
+found the install page says so.
+
+### External commands and placeholders
+
+Commands run through `cmd.exe /c`, so quotes, `&&` and redirection all work. The
+placeholders are expanded for the open package:
+
+| placeholder | meaning |
+|---|---|
+| `{path}` | full path of the package |
+| `{dir}` | the directory that contains it |
+| `{file_name}` | file name with extension |
+| `{base_name}` | file name without extension |
+| `{extension}` | extension without the dot |
+| `{size}` | file size in bytes |
+| `{kind}` | `android` / `apks` / `alpine` |
+| `{app_name}` | application label / Alpine package name |
+| `{package_name}` | application id / Alpine pkgname |
+| `{version}` | version name / pkgver |
+| `{version_code}` | Android version code |
+| `{arch}` | ABIs / Alpine architecture |
+| `{device}` | the device serial selected on the install page |
+| `{adb}` | the adb executable in use |
+
+`{{` and `}}` are literal braces; an unknown placeholder is left as it is, so a typo is
+visible instead of silently turning into nothing. The defaults:
+
+```text
+Android: adb install -r "{path}"
+Alpine : adb push "{path}" /tmp/{file_name} && adb shell apk add --allow-untrusted /tmp/{file_name}
+```
+
+## Settings
+
+The **Settings** button on the far right of the toolbar opens the settings page (the
+language moved here from the toolbar):
+
+* **Language**: follow the system / 中文 / English.
+* **Android install method**: built-in installer or external command, each with its
+  command line.
+* **Alpine install command**: Alpine packages can only use an external command.
+* **adb path**: empty means "look it up".
+* **Placeholder reference** and a **preview for the open package**, so a command can be
+  checked before saving.
+
+Saving writes `apkinfo-config.json` and takes effect immediately (a language change
+re-renders the cached document, it does not re-read the package).
+
 ## The configuration file
 
 `apkinfo-config.json` lives **next to `ApkInfo.exe`** (never in the working directory, for
@@ -179,7 +281,14 @@ rebuild:
 {
   "_readme": ["...how to edit this file..."],
   "language": "auto",
-  "androidVersions": { "34": "14", "35": "15", "36": "16" }
+  "androidVersions": { "34": "14", "35": "15", "36": "16" },
+  "install": {
+    "adbPath": "",
+    "android": { "mode": "builtin", "command": "adb install -r \"{path}\"" },
+    "alpine":  { "command": "adb push \"{path}\" /tmp/{file_name} && adb shell apk add --allow-untrusted /tmp/{file_name}" },
+    "options": { "replace": true, "grant": false, "downgrade": false, "testPackages": false },
+    "device": ""
+  }
 }
 ```
 
@@ -288,17 +397,20 @@ Unit/parser tests (`run_tests.ps1`, 9 modules):
 | axml | 453 lines | line-by-line cross-check against aapt2's `xmltree` output |
 | arsc | 53 | resource table parsing, 42 276 ids cross-checked, density/locale selection |
 | alpine | 104 | v3 `adb` and v2 tar parsing, dependency relations, signature blocks |
-| i18n | 349 | dictionary completeness, no duplicate keys, translations differ from sources |
+| i18n | 469 | dictionary completeness, no duplicate keys, translations differ from sources |
 | tree | 40 | tree building: contiguous children, subtree sizes, path assembly |
 | report | 29 | text and JSON report formats |
 | versions | 12 | legacy version-table parsing, built-in fallback |
 | vector | 22 | path parsing, arc roundness and area, fill rules, transform order |
 | config | 54 | JSON parsing, config creation/editing/broken-file fallback/saving/migration |
+| install | 77 | placeholder expansion, default commands, `adb devices`/`mdns` output parsing, bundle unpacking |
 
-UI tests use PrintWindow + Windows OCR rather than pixel comparison: `ui_flow.ps1` runs 30
-checks in each language, covering window centring, the Close button height, tree
-expansion, copy/dump, per-row selection, and the language dropdown writing its choice to
-the config file.
+UI tests use PrintWindow + Windows OCR rather than pixel comparison: `ui_flow.ps1`
+covers window centring, the Close button height, tree expansion, copy/dump, per-row
+selection and switching the language in the settings page; `ui_install.ps1` covers the
+install page (title, device list, refresh, close), the settings page (language, install
+method, placeholders, adb path) and the external-command mode - with `cmd /c echo`, so
+**nothing is ever installed on a real device**.
 
 **Click safety:** the scripts move the real mouse and click at absolute coordinates, so
 every click first raises the target window and verifies it really is the foreground window;
@@ -316,13 +428,14 @@ repository — put your own sample packages there.
 .                        repository root
   src/
     detect.cpp            content sniffing: Android / Alpine
-    android/              axml, arsc, apk_reader, versions
+    android/              axml, arsc, apk_reader, versions, adb
     alpine/               v3 adb, v2 tar
     image/                stb_image/libwebp decoding, PNG writer, vector rasteriser
     model/                info_document, tree_builder, report
-    util/                 json, hash, clipboard, text
+    util/                 json, hash, clipboard, text, process
     i18n.cpp              English/Chinese dictionary
     config.cpp            the configuration file
+    install.cpp           install settings, placeholder expansion, the two runners
     app.cpp               Win32 details (icons, clipboard, save dialogs)
     main.cpp              Slint UI and state
   ui/main.slint           main window and TextViewer

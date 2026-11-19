@@ -36,6 +36,72 @@ find_package(ZLIB REQUIRED)
 find_package(WebP CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 
+# ---------------------------------------------------------------------------
+# clangd / compile_commands.json
+#   With -DCMAKE_EXPORT_COMPILE_COMMANDS=ON CMake writes a compilation database
+#   (the `ninja` preset does this). clangd can read it, but neither the MSVC STL
+#   nor the Windows SDK include directories are target properties: cl.exe knows
+#   them only through its INCLUDE environment variable, which clangd does not
+#   inherit. Without them clangd reports <string>, <vector>, <windows.h>, ... as
+#   missing and the database is useless. Hand them to clangd as external
+#   includes (-external:I, which clang reads as -isystem; to cl.exe they are
+#   just duplicates of what INCLUDE already provides).
+# ---------------------------------------------------------------------------
+if (MSVC AND CMAKE_EXPORT_COMPILE_COMMANDS)
+    set(APKINFO_SYSTEM_INCLUDE_DIRS "")
+    if (DEFINED ENV{INCLUDE} AND NOT "$ENV{INCLUDE}" STREQUAL "")
+        # Configured from a Developer Command Prompt or by VS Code's CMake Tools
+        # kit, which both export INCLUDE: use it verbatim.
+        foreach(_dir IN ITEMS $ENV{INCLUDE})
+            if (IS_DIRECTORY "${_dir}")
+                list(APPEND APKINFO_SYSTEM_INCLUDE_DIRS "${_dir}")
+            endif()
+        endforeach()
+    else()
+        # Configured from a plain shell: rebuild the two roots from what CMake
+        # already resolved (VC/Tools/MSVC/<ver>/bin/Host<x>/<arch>/cl.exe and the
+        # Windows 10 SDK).
+        get_filename_component(_vc "${CMAKE_CXX_COMPILER}" DIRECTORY)   # .../bin/Hostx64/x64
+        get_filename_component(_vc "${_vc}" DIRECTORY)                  # .../bin/Hostx64
+        get_filename_component(_vc "${_vc}" DIRECTORY)                  # .../bin
+        get_filename_component(_vc "${_vc}" DIRECTORY)                  # .../MSVC/<ver>
+        if (IS_DIRECTORY "${_vc}/include")
+            list(APPEND APKINFO_SYSTEM_INCLUDE_DIRS "${_vc}/include")
+        endif()
+
+        set(_sdk_root "")
+        if (DEFINED ENV{WindowsSdkDir} AND IS_DIRECTORY "$ENV{WindowsSdkDir}/Include")
+            set(_sdk_root "$ENV{WindowsSdkDir}/Include")
+        elseif (IS_DIRECTORY "C:/Program Files (x86)/Windows Kits/10/Include")
+            set(_sdk_root "C:/Program Files (x86)/Windows Kits/10/Include")
+        endif()
+        if (_sdk_root)
+            file(GLOB _sdk_versions RELATIVE "${_sdk_root}" "${_sdk_root}/10.*")
+            if (_sdk_versions)
+                list(SORT _sdk_versions COMPARE NATURAL ORDER DESCENDING)
+                list(GET _sdk_versions 0 _sdk_version)
+                foreach(_sub ucrt um shared winrt cppwinrt)
+                    if (IS_DIRECTORY "${_sdk_root}/${_sdk_version}/${_sub}")
+                        list(APPEND APKINFO_SYSTEM_INCLUDE_DIRS "${_sdk_root}/${_sdk_version}/${_sub}")
+                    endif()
+                endforeach()
+            endif()
+        endif()
+    endif()
+
+    if (NOT APKINFO_SYSTEM_INCLUDE_DIRS)
+        message(WARNING "clangd will not find the MSVC/Windows SDK headers: no system include "
+                        "directories were detected. Reconfigure from a Developer Command Prompt.")
+    endif()
+    # CXX only: the RC compiler must not see these.
+    foreach(_dir IN LISTS APKINFO_SYSTEM_INCLUDE_DIRS)
+        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-external:I${_dir}>")
+    endforeach()
+    message(STATUS "clangd support: ${CMAKE_EXPORT_COMPILE_COMMANDS} "
+                   "(${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json, "
+                   "${APKINFO_SYSTEM_INCLUDE_DIRS})")
+endif()
+
 set(APKINFO_CORE_SOURCES
     src/container/file_map.cpp
     src/container/zip_file.cpp
@@ -58,6 +124,9 @@ set(APKINFO_CORE_SOURCES
     src/android/arsc.cpp
     src/android/versions.cpp
     src/android/apk_reader.cpp
+    src/android/adb.cpp
+    src/install.cpp
+    src/util/process.cpp
     src/alpine/alpine.cpp
     src/alpine/alpine_reader.cpp
 )

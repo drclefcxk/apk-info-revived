@@ -23,7 +23,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_TOOLCHAIN_FILE": "D:/SDK/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "Slint_DIR": "D:/SDK/slint/lib/cmake/Slint"
+        "Slint_DIR": "D:/SDK/slint/lib/cmake/Slint",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     }
   ],

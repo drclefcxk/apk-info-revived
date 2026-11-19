@@ -6,7 +6,7 @@
 #
 # Fixtures must exist first: .\prepare_fixtures.ps1
 param(
-    [ValidateSet("all", "axml", "arsc", "alpine", "i18n", "tree", "report", "versions", "vector", "config")] [string]$Module = "all",
+    [ValidateSet("all", "axml", "arsc", "alpine", "i18n", "tree", "report", "versions", "vector", "config", "install")] [string]$Module = "all",
     [ValidateSet("msvc", "gcc")] [string]$Compiler = "msvc",
     [switch]$SkipBuild
 )
@@ -34,6 +34,9 @@ $modules = [ordered]@{
     versions = @{ include = ".";     sources = @("android\versions.cpp", "util\text.cpp", "i18n.cpp", "config.cpp", "util\json.cpp") }
     vector = @{ include = ".";       sources = @("image\vector.cpp", "model\info_document.cpp") }
     config = @{ include = ".";       sources = @("config.cpp", "util\json.cpp", "util\text.cpp", "i18n.cpp", "android\versions.cpp") }
+    install = @{ include = ".";      sources = @("install.cpp", "android\adb.cpp", "util\process.cpp",
+                                                 "container\zip_file.cpp", "container\file_map.cpp",
+                                                 "model\info_document.cpp") }
 }
 
 function Build-Test {

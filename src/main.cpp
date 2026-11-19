@@ -38,8 +38,10 @@
 #include <slint.h>
 #include <slint_timer.h>
 
+#include "android/adb.h"
 #include "app.h"
 #include "config.h"
+#include "install.h"
 #include "i18n.h"
 #include "main.h"
 #include "model/info_document.h"
@@ -264,7 +266,24 @@ struct ViewState {
     // The section viewer window, created on demand and reused afterwards.
     std::optional<slint::ComponentHandle<TextViewer>> viewer;
     int viewer_section = -1;
+
+    // Install page + settings page. Both are created once and then reused, so the
+    // callbacks registered on them (and the raw pointers captured by the worker
+    // threads) stay valid for the lifetime of the application.
+    std::optional<slint::ComponentHandle<InstallWindow>> install_window;
+    std::optional<slint::ComponentHandle<SettingsWindow>> settings_window;
+    std::string adb_path;     // resolved once per process
+    std::string device;       // serial selected on the install page
+    bool install_busy = false;
+    std::string install_log;  // accumulates, so earlier steps stay visible
 };
+
+// Appends one block to the install page log and scrolls it to the end.
+void install_log(const InstallWindow& window, ViewState& state, const std::string& text) {
+    state.install_log += text;
+    if (!state.install_log.empty() && state.install_log.back() != '\n') state.install_log += '\n';
+    window.set_log_text(slint::SharedString(state.install_log));
+}
 
 // Diagnostic: APKINFO_DEBUG_ROWS=<file> appends the rendered contents model, which
 // is how the tree behaviour is checked without a UI driver.
@@ -420,6 +439,8 @@ void apply_view(MainWindow& ui, ViewState& state) {
     ui.set_contents_title(slint::SharedString(contents_tab_title(document)));
     ui.set_has_error(!document.ok && !document.error.empty());
     ui.set_error_text(slint::SharedString(tr(document.error)));
+    // "Install" only means something for a package that could be handed to a device.
+    ui.set_has_install_target(document.ok && document.kind != ContainerKind::Unknown);
 
     if (document.icon && document.icon->valid()) {
         slint::SharedPixelBuffer<slint::Rgba8Pixel> buffer(static_cast<uint32_t>(document.icon->width),
@@ -556,6 +577,445 @@ void position_viewer_over_main(slint::ComponentHandle<TextViewer>& viewer, int a
     }
 }
 
+// apply_chrome is defined further down; the install/settings helpers below use it.
+void apply_chrome(MainWindow& ui);
+
+// ---------------------------------------------------------------------------
+// Install page and settings page
+//
+// Both windows exist for the lifetime of the process (created on first use), so the
+// callbacks and the worker threads below can hold on to them. Every adb call runs on
+// a worker thread and hands its result back through the event loop: installing a
+// 250 MB package takes long enough that a blocked UI would look like a crash.
+// ---------------------------------------------------------------------------
+
+// Placeholder reference shown in the settings page.
+std::string placeholder_help_text() {
+    std::string text;
+    for (const auto& token : apkinfo::install::placeholder_tokens()) {
+        text += token.first;
+        // align the meanings in a column
+        text += std::string(token.first.size() < 16 ? 16 - token.first.size() : 1, ' ');
+        text += "  " + tr(token.second) + "\n";
+    }
+    return text;
+}
+
+void apply_install_chrome(InstallWindow& window, const ViewState& state) {
+    window.set_window_title(slint::SharedString(tr("Install")));
+    window.set_label_devices(slint::SharedString(tr("Devices")));
+    window.set_label_refresh(slint::SharedString(tr("Refresh")));
+    window.set_label_discover(slint::SharedString(tr("Discover")));
+    window.set_label_wireless(slint::SharedString(tr("Wireless debugging")));
+    window.set_label_endpoint(slint::SharedString(tr("Address (host:port)")));
+    window.set_label_code(slint::SharedString(tr("Pairing code")));
+    window.set_label_connect(slint::SharedString(tr("Connect")));
+    window.set_label_disconnect(slint::SharedString(tr("Disconnect")));
+    window.set_label_pair(slint::SharedString(tr("Pair")));
+    window.set_label_options(slint::SharedString(tr("Install options")));
+    window.set_label_replace(slint::SharedString(tr("Replace existing (-r)")));
+    window.set_label_grant(slint::SharedString(tr("Grant all permissions (-g)")));
+    window.set_label_downgrade(slint::SharedString(tr("Allow downgrade (-d)")));
+    window.set_label_log(slint::SharedString(tr("adb output")));
+    window.set_label_install(slint::SharedString(tr("Install")));
+    window.set_label_close(slint::SharedString(tr("Close")));
+    window.set_label_empty(slint::SharedString(tr("No device - connect one, or pair over Wi-Fi")));
+    window.set_hint_endpoint(slint::SharedString("192.168.1.5:5555"));
+    window.set_hint_code(slint::SharedString(tr("6-digit code")));
+
+    const apkinfo::install::Settings& settings = apkinfo::config().install;
+    window.set_replace(settings.options.replace);
+    window.set_grant(settings.options.grant);
+    window.set_downgrade(settings.options.downgrade);
+
+    if (state.adb_path.empty()) {
+        window.set_adb_line(slint::SharedString(tr("adb was not found - set its path in the settings")));
+    } else {
+        window.set_adb_line(slint::SharedString("adb: " + state.adb_path));
+    }
+    if (state.device.empty()) {
+        window.set_device_hint(slint::SharedString(tr("no device selected")));
+    } else {
+        window.set_device_hint(slint::SharedString(tr("Selected") + ": " + state.device));
+    }
+}
+
+void apply_settings_chrome(SettingsWindow& window, const ViewState& state) {
+    window.set_window_title(slint::SharedString(tr("Settings")));
+    window.set_label_language_section(slint::SharedString(tr("Language")));
+    window.set_label_language(slint::SharedString(tr("Interface language")));
+    window.set_label_android_section(slint::SharedString(tr("Install button - Android packages")));
+    window.set_label_android_mode(slint::SharedString(tr("Install method")));
+    window.set_label_android_command(slint::SharedString(tr("Command line")));
+    window.set_label_alpine_section(slint::SharedString(tr("Install button - Alpine packages")));
+    window.set_label_alpine_command(slint::SharedString(tr("Command line")));
+    window.set_label_adb(slint::SharedString(tr("adb path (empty = search PATH and the SDK)")));
+    window.set_label_placeholders(slint::SharedString(tr("Placeholders")));
+    window.set_label_preview(slint::SharedString(tr("Preview for the open package")));
+    window.set_label_save(slint::SharedString(tr("Save")));
+    window.set_label_cancel(slint::SharedString(tr("Cancel")));
+    window.set_placeholder_help(slint::SharedString(placeholder_help_text()));
+
+    const apkinfo::install::Settings& settings = apkinfo::config().install;
+    window.set_android_mode_index(settings.android_mode == apkinfo::install::Mode::Command ? 1 : 0);
+    window.set_android_command(slint::SharedString(settings.android_command));
+    window.set_alpine_command(slint::SharedString(settings.alpine_command));
+    window.set_adb_path(slint::SharedString(settings.adb_path));
+
+    int language_index = 0;
+    switch (apkinfo::i18n::preference()) {
+        case apkinfo::i18n::Preference::Chinese:
+            language_index = 1;
+            break;
+        case apkinfo::i18n::Preference::English:
+            language_index = 2;
+            break;
+        default:
+            break;
+    }
+    window.set_language_index(language_index);
+
+    if (state.loaded) {
+        const std::string command =
+            apkinfo::install::command_for_package(settings, state.document, state.adb_path, state.device);
+        const bool alpine = state.document.kind == ContainerKind::AlpinePackage;
+        window.set_preview_text(slint::SharedString(command));
+        window.set_note_text(slint::SharedString(
+            alpine ? tr("Alpine packages always use this command - the built-in installer is Android only.")
+                   : state.document.kind == ContainerKind::AndroidSplitBundle
+                         ? tr("A split bundle is installed with adb install-multiple in the built-in mode.")
+                         : ""));
+    } else {
+        window.set_preview_text(slint::SharedString(tr("(no package open)")));
+        window.set_note_text(slint::SharedString(""));
+    }
+}
+
+// Re-reads the device list on a worker thread.
+void refresh_devices(std::shared_ptr<ViewState> state, slint::ComponentHandle<InstallWindow> window) {
+    if (state->install_busy) return;
+    state->install_busy = true;
+    window->set_busy(true);
+    const std::string adb = state->adb_path;
+    std::thread([state, window, adb]() {
+        const std::vector<apkinfo::adb::Device> devices = apkinfo::adb::devices(adb);
+        slint::invoke_from_event_loop([state, window, devices]() {
+            std::vector<DeviceItem> items;
+            items.reserve(devices.size());
+            int selected = -1;
+            for (size_t i = 0; i < devices.size(); ++i) {
+                DeviceItem item;
+                item.label = slint::SharedString(devices[i].label());
+                item.serial = slint::SharedString(devices[i].serial);
+                item.state = slint::SharedString(devices[i].state);
+                item.usable = devices[i].usable();
+                items.push_back(std::move(item));
+                // keep the previous choice when the device is still there
+                if (!state->device.empty() && devices[i].serial == state->device) {
+                    selected = static_cast<int>(i);
+                } else if (selected < 0 && devices[i].usable()) {
+                    selected = static_cast<int>(i);
+                }
+            }
+            window->set_devices(std::make_shared<slint::VectorModel<DeviceItem>>(std::move(items)));
+            if (selected >= 0) {
+                state->device = std::string(window->get_devices()->row_data(static_cast<size_t>(selected))->serial);
+                window->set_device_index(selected);
+                window->set_device_hint(
+                    slint::SharedString(tr("Selected") + ": " + std::string(std::string(state->device))));
+            } else {
+                state->device.clear();
+                window->set_device_index(-1);
+                window->set_device_hint(slint::SharedString(tr("no device selected")));
+            }
+            state->install_busy = false;
+            window->set_busy(false);
+        });
+    }).detach();
+}
+
+// adb connect / disconnect / pair, then refresh the list so the result is visible.
+void run_adb_step(std::shared_ptr<ViewState> state, slint::ComponentHandle<InstallWindow> window,
+                  std::string title, std::function<apkinfo::adb::Result(const std::string& adb)> action) {
+    if (state->install_busy) return;
+    state->install_busy = true;
+    window->set_busy(true);
+    const std::string adb = state->adb_path;
+    install_log(*window, *state, "> " + title);
+    std::thread([state, window, adb, title, action = std::move(action)]() {
+        const apkinfo::adb::Result result = action(adb);
+        slint::invoke_from_event_loop([state, window, result]() {
+            std::string text = result.output;
+            if (text.empty()) text = result.started ? "(no output)" : result.error;
+            install_log(*window, *state, text);
+            state->install_busy = false;
+            window->set_busy(false);
+            // the device list usually changed (a new wireless device appeared)
+            refresh_devices(state, window);
+        });
+    }).detach();
+}
+
+// The Android built-in install: adb install / install-multiple on a worker thread.
+void run_install(std::shared_ptr<ViewState> state, slint::ComponentHandle<InstallWindow> window) {
+    if (state->install_busy) return;
+    if (state->adb_path.empty()) {
+        install_log(*window, *state, tr("adb was not found - set its path in the settings"));
+        return;
+    }
+    if (state->device.empty()) {
+        install_log(*window, *state, tr("select a device first"));
+        return;
+    }
+
+    apkinfo::install::Settings settings = apkinfo::config().install;
+    settings.options.replace = window->get_replace();
+    settings.options.grant = window->get_grant();
+    settings.options.downgrade = window->get_downgrade();
+
+    state->install_busy = true;
+    window->set_busy(true);
+
+    const std::string adb = state->adb_path;
+    const std::string device = state->device;
+    const std::string path = state->path;
+    const ContainerKind kind = state->document.kind;
+    install_log(*window, *state, tr("Installing") + ": " + state->document.file_name);
+
+    std::thread([state, window, adb, device, path, kind, settings]() {
+        const apkinfo::install::Outcome outcome =
+            apkinfo::install::run_builtin(settings, adb, device, path, kind);
+        slint::invoke_from_event_loop([state, window, outcome, device]() {
+            install_log(*window, *state, outcome.output);
+            if (outcome.success) install_log(*window, *state, tr("Installed successfully."));
+            // remember the device that was used, so it is preselected next time
+            if (!device.empty() && apkinfo::config().install.device != device) {
+                apkinfo::mutable_config().install.device = device;
+                apkinfo::save_config();
+            }
+            state->install_busy = false;
+            window->set_busy(false);
+            refresh_devices(state, window);
+        });
+    }).detach();
+}
+
+// Runs the configured command line for whatever package is open.
+void run_install_command(std::shared_ptr<ViewState> state, MainWindow* ui) {
+    const apkinfo::install::Settings& settings = apkinfo::config().install;
+    const std::string command =
+        apkinfo::install::command_for_package(settings, state->document, state->adb_path, state->device);
+    if (command.empty()) {
+        ui->set_status_text(slint::SharedString(tr("no install command is configured")));
+        return;
+    }
+    ui->set_status_text(slint::SharedString(tr("running the install command…")));
+
+    // The output goes into the viewer window, which already shows long selectable text.
+    if (!state->viewer.has_value()) state->viewer.emplace(TextViewer::create());
+    auto viewer = *state->viewer;
+    viewer->set_viewer_title(slint::SharedString(tr("Install command output")));
+    viewer->set_viewer_hint(slint::SharedString(""));
+    viewer->set_label_close(slint::SharedString(tr("Close")));
+    viewer->set_viewer_text(slint::SharedString(command + "\n\n" + tr("running…")));
+    viewer->show();
+
+    const apkinfo::install::Context context =
+        apkinfo::install::make_context(state->document, state->adb_path, state->device);
+    std::thread([state, viewer, command, context]() {
+        const apkinfo::install::Outcome outcome = apkinfo::install::run_command(command, context);
+        const std::string text = outcome.command + "\n\n" + outcome.output;
+        slint::invoke_from_event_loop([viewer, text]() mutable {
+            viewer->set_viewer_text(slint::SharedString(text));
+            viewer->show();
+        });
+    }).detach();
+}
+
+// Centres a secondary window over the main window: the window is mapped first (so it
+// has a real size), then moved. Retried because the size is still 0 right after
+// show() on the first event-loop turn.
+template <typename Component>
+void centre_over_main(slint::ComponentHandle<Component> component, std::shared_ptr<int> attempts = nullptr) {
+    if (!attempts) attempts = std::make_shared<int>(0);
+    const HWND main_window = main_window_handle();
+    if (!main_window) return;
+
+    RECT main_rect{};
+    if (!GetWindowRect(main_window, &main_rect)) return;
+
+    // The window that was just shown is the foreground one (Slint activates it); fall
+    // back to "any other titled window of this process" when focus went elsewhere.
+    HWND self = GetForegroundWindow();
+    DWORD owner = 0;
+    if (self) GetWindowThreadProcessId(self, &owner);
+    if (!self || owner != GetCurrentProcessId() || self == main_window) {
+        self = find_viewer_window(main_window);
+    }
+    RECT self_rect{};
+    const bool have = self && self != main_window && GetWindowRect(self, &self_rect);
+    const LONG width = have ? self_rect.right - self_rect.left : 0;
+    const LONG height = have ? self_rect.bottom - self_rect.top : 0;
+    if (!have || width < 240 || height < 200) {
+        if (*attempts < 60) {
+            ++*attempts;
+            slint::Timer::single_shot(std::chrono::milliseconds(50), [component, attempts]() {
+                centre_over_main(component, attempts);
+            });
+        }
+        return;
+    }
+
+    const LONG main_width = main_rect.right - main_rect.left;
+    const LONG main_height = main_rect.bottom - main_rect.top;
+    LONG x = main_rect.left + (main_width - width) / 2;
+    LONG y = main_rect.top + (main_height - height) / 2;
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof monitor;
+    if (GetMonitorInfoW(MonitorFromWindow(main_window, MONITOR_DEFAULTTONEAREST), &monitor)) {
+        const LONG max_x = std::max(monitor.rcWork.left, monitor.rcWork.right - width);
+        const LONG max_y = std::max(monitor.rcWork.top, monitor.rcWork.bottom - height);
+        x = std::min(std::max(x, monitor.rcWork.left), max_x);
+        y = std::min(std::max(y, monitor.rcWork.top), max_y);
+    }
+    SetWindowPos(self, HWND_TOP, static_cast<int>(x), static_cast<int>(y), 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+    BringWindowToTop(self);
+    SetForegroundWindow(self);
+}
+
+// Builds and shows the install page (created once, then reused).
+void show_install_window(std::shared_ptr<ViewState> state, slint::ComponentHandle<MainWindow> host) {
+    if (!state->install_window) {
+        state->install_window.emplace(InstallWindow::create());
+        slint::ComponentHandle<InstallWindow> window = *state->install_window;
+
+        window->on_close_requested([window]() mutable { window->hide(); });
+        window->on_endpoint_edited([window](slint::SharedString text) { window->set_endpoint(text); });
+        window->on_code_edited([window](slint::SharedString text) { window->set_pairing_code(text); });
+        window->on_device_selected([state, window](int index) {
+            const auto model = window->get_devices();
+            if (index < 0 || static_cast<size_t>(index) >= model->row_count()) return;
+            state->device = std::string(model->row_data(static_cast<size_t>(index))->serial);
+            window->set_device_index(index);
+            window->set_device_hint(slint::SharedString(tr("Selected") + ": " + state->device));
+        });
+        window->on_refresh_requested([state, window]() { refresh_devices(state, window); });
+        window->on_discover_requested([state, window]() {
+            if (state->install_busy) return;
+            state->install_busy = true;
+            window->set_busy(true);
+            const std::string adb = state->adb_path;
+            std::thread([state, window, adb]() {
+                const std::vector<apkinfo::adb::MdnsService> services = apkinfo::adb::mdns_services(adb);
+                slint::invoke_from_event_loop([state, window, services]() {
+                    std::string text;
+                    std::string pairing;
+                    std::string connecting;
+                    for (const apkinfo::adb::MdnsService& service : services) {
+                        const bool is_pairing = service.type.find("pairing") != std::string::npos;
+                        text += (is_pairing ? tr("pairing") : tr("connect")) + ":  " + service.endpoint + "  (" +
+                                service.name + ")\n";
+                        if (is_pairing && pairing.empty()) pairing = service.endpoint;
+                        if (!is_pairing && connecting.empty()) connecting = service.endpoint;
+                    }
+                    if (text.empty()) text = tr("no service discovered (wireless debugging must be on)");
+                    window->set_mdns_text(slint::SharedString(text));
+                    // fill the field with what the next step needs
+                    if (std::string(window->get_endpoint()).empty()) {
+                        const std::string suggestion = pairing.empty() ? connecting : pairing;
+                        if (!suggestion.empty()) window->set_endpoint(slint::SharedString(suggestion));
+                    }
+                    state->install_busy = false;
+                    window->set_busy(false);
+                });
+            }).detach();
+        });
+        window->on_connect_requested([state, window]() {
+            const std::string endpoint(window->get_endpoint());
+            if (endpoint.empty()) {
+                install_log(*window, *state, tr("enter the address first"));
+                return;
+            }
+            run_adb_step(state, window, "adb connect " + endpoint,
+                         [endpoint](const std::string& adb) { return apkinfo::adb::connect(adb, endpoint); });
+        });
+        window->on_disconnect_requested([state, window]() {
+            const std::string endpoint(window->get_endpoint());
+            run_adb_step(state, window, "adb disconnect " + endpoint,
+                         [endpoint](const std::string& adb) { return apkinfo::adb::disconnect(adb, endpoint); });
+        });
+        window->on_pair_requested([state, window]() {
+            const std::string endpoint(window->get_endpoint());
+            const std::string code(window->get_pairing_code());
+            if (endpoint.empty() || code.empty()) {
+                install_log(*window, *state, tr("the address and the pairing code are both needed"));
+                return;
+            }
+            run_adb_step(state, window, "adb pair " + endpoint,
+                         [endpoint, code](const std::string& adb) { return apkinfo::adb::pair(adb, endpoint, code); });
+        });
+        window->on_install_requested([state, window]() { run_install(state, window); });
+    }
+
+    slint::ComponentHandle<InstallWindow> window = *state->install_window;
+    if (state->adb_path.empty()) {
+        state->adb_path = apkinfo::adb::find_adb(apkinfo::config().install.adb_path);
+    }
+    if (state->device.empty() && !apkinfo::config().install.device.empty()) {
+        state->device = apkinfo::config().install.device;
+    }
+    apply_install_chrome(*window, *state);
+    std::string package_line = tr_value(state->document.title);
+    if (!state->document.subtitle.empty()) package_line += "  ·  " + state->document.subtitle;
+    window->set_package_line(slint::SharedString(package_line));
+    window->show();
+    centre_over_main(*state->install_window);
+    refresh_devices(state, *state->install_window);
+}
+
+// Builds and shows the settings page.
+void show_settings_window(std::shared_ptr<ViewState> state, slint::ComponentHandle<MainWindow> host) {
+    if (!state->settings_window) {
+        state->settings_window.emplace(SettingsWindow::create());
+        slint::ComponentHandle<SettingsWindow> window = *state->settings_window;
+
+        window->on_cancel_requested([window]() mutable { window->hide(); });
+        window->on_android_command_edited([window](slint::SharedString text) { window->set_android_command(text); });
+        window->on_alpine_command_edited([window](slint::SharedString text) { window->set_alpine_command(text); });
+        window->on_adb_path_edited([window](slint::SharedString text) { window->set_adb_path(text); });
+        window->on_save_requested([window, state, host]() mutable {
+            const int language_index = window->get_language_index();
+            apkinfo::i18n::Preference preference = apkinfo::i18n::Preference::Auto;
+            if (language_index == 1) preference = apkinfo::i18n::Preference::Chinese;
+            if (language_index == 2) preference = apkinfo::i18n::Preference::English;
+            apkinfo::i18n::set_preference(preference);
+
+            apkinfo::Config& config = apkinfo::mutable_config();
+            config.language = static_cast<apkinfo::LanguagePreference>(preference);
+            config.install.android_mode = window->get_android_mode_index() == 1 ? apkinfo::install::Mode::Command
+                                                                                : apkinfo::install::Mode::Builtin;
+            config.install.android_command = std::string(window->get_android_command());
+            config.install.alpine_command = std::string(window->get_alpine_command());
+            config.install.adb_path = std::string(window->get_adb_path());
+            apkinfo::save_config();
+
+            // the adb path may have changed
+            state->adb_path = apkinfo::adb::find_adb(config.install.adb_path);
+
+            apply_chrome(*host);
+            if (state->loaded) apply_view(*host, *state);
+            if (state->install_window) apply_install_chrome(**state->install_window, *state);
+            apply_settings_chrome(*window, *state);
+            window->hide();
+        });
+    }
+
+    slint::ComponentHandle<SettingsWindow> window = *state->settings_window;
+    apply_settings_chrome(*window, *state);
+    window->show();
+    centre_over_main(*state->settings_window);
+}
+
 // Opens (or refreshes and re-shows) the viewer window for one section.
 void show_section_window(ViewState& state, size_t section_index) {
     if (section_index >= state.document.sections.size()) return;
@@ -608,25 +1068,8 @@ void apply_chrome(MainWindow& ui) {
     ui.set_label_copy_all(slint::SharedString(tr("Copy all")));
     ui.set_label_dump(slint::SharedString(tr("Dump…")));
     ui.set_label_export_icon(slint::SharedString(tr("Export icon…")));
-    // Dropdown: 0 = follow the system, 1 = 中文, 2 = English.
-    int index = 0;
-    switch (apkinfo::i18n::preference()) {
-        case apkinfo::i18n::Preference::Chinese:
-            index = 1;
-            break;
-        case apkinfo::i18n::Preference::English:
-            index = 2;
-            break;
-        case apkinfo::i18n::Preference::Auto:
-        default:
-            index = 0;
-            break;
-    }
-    // The dropdown's model is constant (its entries are the language names, with the
-    // system entry written bilingually), so only the selection is set here. Rebuilding
-    // the model on a language change reset the control to its first entry, which is what
-    // made it look stuck on "follow the system".
-    ui.set_language_index(index);
+    ui.set_label_install(slint::SharedString(tr("Install")));
+    ui.set_label_settings(slint::SharedString(tr("Settings")));
 }
 
 // ---------------------------------------------------------------------------
@@ -712,26 +1155,22 @@ int run(int argument_count, wchar_t** arguments) {
     });
 
     // Language dropdown: 0 = follow the system, 1 = 中文, 2 = English. The choice is
-    // stored in the config file and the cached document is re-rendered (never re-read).
-    handle->on_language_selected([ui, state](int index) {
-        const auto started = std::chrono::steady_clock::now();
-        apkinfo::i18n::Preference preference = apkinfo::i18n::Preference::Auto;
-        if (index == 1) preference = apkinfo::i18n::Preference::Chinese;
-        if (index == 2) preference = apkinfo::i18n::Preference::English;
-
-        apkinfo::i18n::set_preference(preference);
-        apkinfo::mutable_config().language = static_cast<apkinfo::LanguagePreference>(preference);
-        apkinfo::save_config();
-
-        apply_chrome(*ui);
-        if (state->loaded) apply_view(*ui, *state);
-        if (std::getenv("APKINFO_DEBUG_TIMING")) {
-            const double ms =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-            std::fprintf(stderr, "language switch (%s): %.2f ms\n", apkinfo::i18n::code(apkinfo::i18n::current()), ms);
+    // "Install": the built-in page for Android packages, the configured command line for
+    // Alpine packages (and for Android packages when the settings say so).
+    handle->on_install_requested([ui, handle, state]() {
+        if (!state->loaded || state->document.kind == ContainerKind::Unknown) return;
+        const apkinfo::install::Settings& settings = apkinfo::config().install;
+        const bool use_builtin = state->document.kind != ContainerKind::AlpinePackage &&
+                                 settings.android_mode == apkinfo::install::Mode::Builtin;
+        if (!use_builtin) {
+            run_install_command(state, &*ui);
+            return;
         }
+        show_install_window(state, handle);
     });
 
+    // "Settings": language, install behaviour, adb path.
+    handle->on_settings_requested([handle, state]() { show_settings_window(state, handle); });
     // "Copy all" puts the whole localised report on the clipboard and confirms on
     // the button itself - the status bar keeps showing the package information.
     handle->on_copy_all_requested([ui, state]() {

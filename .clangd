@@ -1,0 +1,15 @@
+# clangd configuration (https://clangd.llvm.org/config)
+#
+# CMake writes build-ninja/compile_commands.json — the `ninja` preset sets
+# CMAKE_EXPORT_COMPILE_COMMANDS=ON, and with it CMakeLists.txt also hands the
+# MSVC/Windows SDK include directories to the database (clangd does not inherit
+# cl.exe's INCLUDE variable). Point clangd at that directory; the path is
+# relative to this file.
+#
+# One-time setup: configure the preset and build once, so that Slint's generated
+# header exists (`build-ninja/main.h`) and the file in src/ can find it:
+#
+#   cmake --preset ninja && cmake --build build-ninja
+#
+CompileFlags:
+  CompilationDatabase: build-ninja

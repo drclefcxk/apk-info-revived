@@ -36,11 +36,13 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # The screenshots are of the default state: language "follow the system", which here is
 # Chinese for the -zh shots; the -en shots override it for one run via APKINFO_LANG.
+# The screenshots show the default state, so the configuration is moved aside for the
+# run and restored afterwards (the test suite leaves its own commands in there).
 $configFile = Join-Path (Split-Path -Parent $Exe) "apkinfo-config.json"
+$configBackup = Join-Path $env:TEMP "apkinfo-config-backup.json"
 if (Test-Path $configFile) {
-    $configText = Get-Content $configFile -Raw
-    $configText = $configText -replace '"language"\s*:\s*"[a-z]+"', '"language": "auto"'
-    Set-Content -Path $configFile -Value $configText -Encoding UTF8 -NoNewline
+    Copy-Item $configFile $configBackup -Force
+    Remove-Item $configFile -Force
 }
 Remove-Item Env:\APKINFO_AUTO_SWITCH_MS -ErrorAction SilentlyContinue
 
@@ -55,6 +57,7 @@ public class Shot {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, UIntPtr extra);
@@ -164,6 +167,33 @@ function Capture-Screen([IntPtr]$hwnd, [string]$name) {
     $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $bitmap.Dispose()
     return @{ Path = $path; Rect = $rect; Width = $width; Height = $height }
+}
+
+# Covers the device rows of the install page with a fictional one: the screenshot is
+# published, the serial of the phone that happened to be plugged in is not.
+function Protect-DeviceList([string]$path, $shot) {
+    # FromFile keeps the file locked, so work on a copy
+    $source = [System.Drawing.Image]::FromFile($path)
+    $bitmap = New-Object System.Drawing.Bitmap($source)
+    $source.Dispose()
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $background = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(250, 251, 252))
+    # the device list sits in the first card of the left column
+    $left = 24
+    $top = 100
+    $width = [int]($shot.Width * 0.36)
+    $height = 230
+    $graphics.FillRectangle($background, $left, $top, $width, $height)
+    $font = New-Object System.Drawing.Font("Consolas", 9)
+    $ink = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(29, 35, 48))
+    $graphics.DrawString("O  Pixel 7  (emulator-5554)  ·  device", $font, $ink, ($left + 12), ($top + 10))
+    $graphics.DrawString("O  Pixel 4a (R58M12345)       ·  unauthorized", $font, $ink, ($left + 12), ($top + 40))
+    $graphics.Dispose()
+    $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bitmap.Dispose()
+    $font.Dispose()
+    $ink.Dispose()
+    $background.Dispose()
 }
 
 function Get-Lines([string]$path) {
@@ -279,20 +309,6 @@ try {
     [void][Shot]::SendMessageW($viewer, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)   # WM_CLOSE
     Start-Sleep -Milliseconds 900
 
-    # 5. the language dropdown, open (a screen grab: the popup is a separate window)
-    $shot = Capture $app.Handle "temp-lang"
-    $combo = (Get-Lines $shot.Path) | Where-Object { $_.Y -lt 95 -and $_.Text -match "系\s*统|System|中\s*文|English" } |
-             Select-Object -First 1
-    if ($null -eq $combo) { throw "no language dropdown found" }
-    Click-Line $shot $combo $app.Handle
-    Start-Sleep -Milliseconds 800
-    [void][Shot]::SetCursorPos(($shot.Rect.Left + 40), ($shot.Rect.Top + 300))
-    Start-Sleep -Milliseconds 250
-    $menu = Capture-Screen $app.Handle "language-menu-zh"
-    Write-Output "  language-menu-zh.png"
-    [Shot]::keybd_event(0x1B, 0, 0, [UIntPtr]::Zero)         # ESC closes the popup
-    [Shot]::keybd_event(0x1B, 0, 2, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 500
 }
 finally { Stop-App $app }
 
@@ -364,6 +380,68 @@ if ($null -ne $alpineTree) {
         Write-Output "  alpine-tree-zh.png"
     }
     finally { Stop-App $app }
+}
+
+# 8. the install page and the settings page
+$app = Start-App $Bundle "zh"
+try {
+    # the toolbar cluster is explicit geometry; Settings is the last button
+    $client = New-Object Shot+RECT
+    [void][Shot]::GetClientRect($app.Handle, [ref]$client)
+    $scale = 1.25
+    $clusterStart = ($client.Right - $client.Left) / $scale - 778
+    $rect = New-Object Shot+RECT
+    [void][Shot]::GetWindowRect($app.Handle, [ref]$rect)
+
+    $installX = [int]($rect.Left + ($clusterStart + 310 + 48) * $scale)
+    Click-At $installX ($rect.Top + 70) $app.Handle
+    $page = [IntPtr]::Zero
+    $deadline = (Get-Date).AddSeconds(12)
+    while ((Get-Date) -lt $deadline -and $page -eq [IntPtr]::Zero) {
+        Start-Sleep -Milliseconds 400
+        $callback = [Shot+EnumProc] {
+            param($h, $l)
+            [uint32]$owner = 0
+            [void][Shot]::GetWindowThreadProcessId($h, [ref]$owner)
+            if ($owner -eq $app.Process.Id -and [Shot]::IsWindowVisible($h) -and $h -ne $app.Handle) {
+                $text = New-Object System.Text.StringBuilder 256
+                [void][Shot]::GetWindowTextW($h, $text, 256)
+                if ($text.Length -gt 0) { $script:foundPage = $h }
+            }
+            return $true
+        }
+        $script:foundPage = [IntPtr]::Zero
+        [void][Shot]::EnumWindows($callback, [IntPtr]::Zero)
+        $page = $script:foundPage
+    }
+    if ($page -ne [IntPtr]::Zero) {
+        Start-Sleep -Milliseconds 1500
+        Move-Away $page
+        $installShot = Capture $page "install-page-zh"
+        Protect-DeviceList $installShot.Path $installShot
+        Write-Output "  install-page-zh.png"
+        [void][Shot]::SendMessageW($page, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+        Start-Sleep -Milliseconds 800
+    }
+
+    $settingsX = [int]($rect.Left + ($clusterStart + 672 + 44) * $scale)
+    Click-At $settingsX ($rect.Top + 70) $app.Handle
+    Start-Sleep -Seconds 2
+    $script:foundPage = [IntPtr]::Zero
+    [void][Shot]::EnumWindows($callback, [IntPtr]::Zero)
+    if ($script:foundPage -ne [IntPtr]::Zero) {
+        Move-Away $script:foundPage
+        [void](Capture $script:foundPage "settings-zh")
+        Write-Output "  settings-zh.png"
+        [void][Shot]::SendMessageW($script:foundPage, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+    }
+}
+finally { Stop-App $app }
+
+# put the previous configuration back
+if (Test-Path $configBackup) {
+    Copy-Item $configBackup $configFile -Force
+    Remove-Item $configBackup -Force
 }
 
 Remove-Item (Join-Path $OutDir "temp-*.png") -ErrorAction SilentlyContinue
