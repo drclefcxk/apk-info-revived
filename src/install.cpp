@@ -345,16 +345,17 @@ Outcome run_command(const std::string& command, const Context& context) {
         outcome.output = "no command is configured";
         return outcome;
     }
-    // Each step runs in the package's own directory - including a UNC one such as
-    // \\wsl.localhost\<distro>\..., which CreateProcessW starts in happily and cmd.exe
-    // never could.
+    // Each step is started by CreateProcessW itself, so the working directory is simply
+    // inherited from the app - whatever directory the shell was in when it started APK
+    // Info. Nothing needs to move it: {path} and {dir} are absolute, and moving it would
+    // make relative paths in a command mean something other than they do for the caller.
     const std::vector<std::string> steps = split_steps(expanded);
     const bool many = steps.size() > 1;
     std::string output;
     int exit_code = 0;
     bool timed_out = false;
     for (const std::string& step : steps) {
-        const process::Result result = process::run(step, 900000, context.dir);
+        const process::Result result = process::run(step, 900000);
         if (many) output += (output.empty() ? "" : "\n") + std::string("> ") + step + "\n";
         if (!result.started && !result.error.empty()) {
             output += result.error;

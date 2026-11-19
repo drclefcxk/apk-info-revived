@@ -25,7 +25,7 @@ struct Entry {
 constexpr Entry kDictionary[] = {
     {"full path of ApkInfo.exe", "ApkInfo.exe 的完整路径"},
     {"the directory that contains ApkInfo.exe", "ApkInfo.exe 所在目录"},
-    {"A command is started directly (no cmd.exe), in the package's directory.", "命令直接启动（不经 cmd.exe），工作目录为包所在目录。"},
+    {"A command is started directly (no cmd.exe) in the working directory of APK Info.", "命令直接启动（不经 cmd.exe），沿用 APK Info 的工作目录。"},
     {"\"&&\" chains steps; pipes, redirection and %VAR% need \"cmd /c ...\".", "\"&&\" 可以串联多步；管道、重定向、%VAR% 需要自己写 \"cmd /c ...\"。"},
     {"package kind: android, apks or alpine", "包类型：android / apks / alpine"},
     {"Install", "安装"},

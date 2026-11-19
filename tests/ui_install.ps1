@@ -396,8 +396,9 @@ if ($uncReachable) {
                 $joined = ($lines | ForEach-Object { $_.Text }) -join " "
                 # the child's own current directory has to be the share, not C:\Windows
                 Check ($joined -match "CWD=") "the command reported its working directory"
+                # the child inherits the app's working directory - no move, no cmd.exe
                 Check ($joined -match "localhost|apkinfo-unc|C\$") `
-                      "the command ran inside the share ($joined)"
+                      "the command inherited the app working directory (the share) ($joined)"
                 Check ($joined -notmatch "UNC paths are not supported") "nothing complained about the UNC path"
                 # OCR reads a capital I as a lowercase l ("KlND")
                 Check ($joined -match "K[Il]ND=(android|apks)") "the placeholders were expanded for the UNC package"

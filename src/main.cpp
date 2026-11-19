@@ -708,7 +708,7 @@ void apply_settings_chrome(SettingsWindow& window, const ViewState& state) {
         window.set_preview_text(slint::SharedString(command));
         // A command is not run through a shell, so what works - and what needs an
         // explicit cmd /c - is said right under the preview.
-        std::string note = tr("A command is started directly (no cmd.exe), in the package's directory. "
+        std::string note = tr("A command is started directly (no cmd.exe) in the working directory of APK Info. "
                               "\"&&\" chains steps; pipes, redirection and %VAR% need \"cmd /c ...\".");
         if (alpine) {
             note += "\n" + tr("Alpine packages always use this command - the built-in installer is Android only.");
