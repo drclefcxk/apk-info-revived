@@ -30,6 +30,10 @@ Use **Copy all** to copy the report to the clipboard, or **Dump…** to save it 
 | Android split archives (`.apks`, `.apkm`, `.xapk`) | App details from the base APK and split classifications by ABI, density, language, or feature. |
 | Alpine Linux APK (`.apk`) | Package name, version, architecture, licence, maintainer, dependencies, install scripts, signatures, and file listing. Supports apk-tools 2.x gzip/tar and 3.x ADB formats. |
 
+OpenWrt uses `apk` starting with version 25.12. The screenshot shows the BusyBox package from OpenWrt 25.12.6 (`aarch64_cortex-a53`, Alpine APK v3) open in APK Info:
+
+![APK Info showing the version, architecture, and dependencies of the OpenWrt 25.12.6 BusyBox package](docs/screenshots/openwrt-25.12-apk.png)
+
 The viewer reports signature information without cryptographically verifying it. Some Android icon effects, including gradients, clipping, and theme colours, may differ from what you see on a device.
 
 More screenshots: [Alpine package](docs/screenshots/alpine-x86_64-zh.png) · [File tree](docs/screenshots/tree-zh.png) · [Android install page](docs/screenshots/install-page-zh.png) · [Settings](docs/screenshots/settings-zh.png)

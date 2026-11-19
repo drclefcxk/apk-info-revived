@@ -30,6 +30,10 @@ Android 和 Alpine Linux 都使用 `.apk` 扩展名，但包格式完全不同�
 | Android 分包归档 (`.apks`、`.apkm`、`.xapk`) | 基础 APK 的应用信息，以及各分包的 ABI、密度、语言或功能分类。 |
 | Alpine Linux APK (`.apk`) | 包名、版本、架构、许可证、维护者、依赖关系、安装脚本、签名和文件清单。支持 apk-tools 2.x 的 gzip/tar 和 3.x 的 ADB 格式。 |
 
+OpenWrt 从 25.12 起使用 `apk`。下图展示在 APK Info 中打开 OpenWrt 25.12.6 的 BusyBox 包（`aarch64_cortex-a53`，Alpine APK v3）：
+
+![APK Info 打开 OpenWrt 25.12.6 的 BusyBox 包后显示的版本、架构和依赖](docs/screenshots/openwrt-25.12-apk.png)
+
 签名信息仅供查看，不做密码学验证。部分 Android 图标效果（例如渐变、裁剪和主题颜色）可能与设备上的显示不同。
 
 更多截图：[Alpine 包](docs/screenshots/alpine-x86_64-zh.png) · [文件树](docs/screenshots/tree-zh.png) · [Android 安装页](docs/screenshots/install-page-zh.png) · [设置页](docs/screenshots/settings-zh.png)
