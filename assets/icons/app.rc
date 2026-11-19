@@ -31,8 +31,8 @@ IDI_ANDROID  ICON  "android.ico"
 IDI_ALPINE   ICON  "alpine.ico"
 
 1 VERSIONINFO
-FILEVERSION     1,1,0,0
-PRODUCTVERSION  1,1,0,0
+FILEVERSION     1,1,1,0
+PRODUCTVERSION  1,1,1,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          0x40004L
@@ -45,12 +45,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "APK Info Revived contributors"
             VALUE "FileDescription",  "APK Info - Revived (Android / Alpine package viewer)"
-            VALUE "FileVersion",      "1.1.0.0"
+            VALUE "FileVersion",      "1.1.1.0"
             VALUE "InternalName",     "ApkInfo"
             VALUE "LegalCopyright",   "APK Info Revived contributors"
             VALUE "OriginalFilename", "ApkInfo.exe"
             VALUE "ProductName",      "APK Info - Revived"
-            VALUE "ProductVersion",   "1.1.0.0"
+            VALUE "ProductVersion",   "1.1.1.0"
         END
     END
     BLOCK "VarFileInfo"

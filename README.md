@@ -97,11 +97,11 @@ cmake --build build-ninja        # 同时生成 Slint 的 main.h
 `.github/workflows/release.yml` 在 `windows-latest` 上把本项目的构建流程重放一遍：静默安装 Slint C++、用 vcpkg 装三件套、`build.ps1 -Clean`、冒烟测试，然后把 `build\Release` 打包成 `APK-Info-Revived-<tag>-win64.zip` 并作为 Release 资产发布。
 
 ```powershell
-git tag v1.1.0
-git push origin v1.1.0        # 触发发布
+git tag v1.1.1
+git push origin v1.1.1        # 触发发布
 ```
 
-也可以在 Actions 页面手动 Run workflow（`tag` 默认 `v1.1.0`）。冒烟测试用 `tests/make_smoke_package.py` 现场生成一个最小 Alpine v2 包，断言 CLI 能识别它、并把普通文件判为"无法识别"，因此不需要任何样例包或 aapt2 工具链。
+也可以在 Actions 页面手动 Run workflow（`tag` 默认 `v1.1.1`）。冒烟测试用 `tests/make_smoke_package.py` 现场生成一个最小 Alpine v2 包，断言 CLI 能识别它、并把普通文件判为"无法识别"，因此不需要任何样例包或 aapt2 工具链。
 
 ## 使用
 
@@ -150,6 +150,7 @@ Get-ChildItem | Unblock-File
 * **adb 输出**：每一步的命令与 adb 的原始输出都追加在这里，可选中复制。
 * 分发包（`.apks` / `.apkm` / `.xapk`）会先解出 `base.apk` 与各 `split_*.apk` 到临时目录，再用 `adb install-multiple` 安装（`base.apk` 排在最前），装完删除临时目录。
 * adb 的所有调用都在工作线程上跑，安装大包时界面不冻结。
+* **网络路径（含 WSL）**：包在 `\\wsl.localhost\<发行版>\…` 或任何网络共享上也能装——外部命令会改在临时目录里执行（`cmd.exe` 无法以 UNC 目录作为当前目录，否则会退回 `C:\Windows` 并让相对路径全错），内置安装器则先把包复制到临时目录再交给 adb。日志里会说明这一点。
 
 adb 的位置：设置里的 `install.adbPath` → `%ADB%` → `PATH` → `%ANDROID_HOME%`/`%ANDROID_SDK_ROOT%` → 常见的 SDK 目录。找不到时安装页会直接说明。
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(ApkInfo VERSION 1.1.0 LANGUAGES CXX)
+project(ApkInfo VERSION 1.1.1 LANGUAGES CXX)
 enable_language(RC)   # app icon + version info (assets/icons/app.rc)
 
 # ---------------------------------------------------------------------------

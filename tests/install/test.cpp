@@ -10,6 +10,7 @@
 #include "android/adb.h"
 #include "install.h"
 #include "model/info_document.h"
+#include "util/process.h"
 
 namespace {
 
@@ -169,12 +170,57 @@ void test_parse_mdns() {
     check(parse_mdns("").empty(), "empty mdns output yields nothing");
 }
 
+void test_unc_paths() {
+    using apkinfo::process::is_unc_path;
+    using apkinfo::process::run_shell;
+    using apkinfo::process::working_directory_for;
+
+    check(is_unc_path("\\\\wsl$\\Ubuntu\\home\\me"), "a WSL share is UNC");
+    check(is_unc_path("\\\\wsl.localhost\\Ubuntu\\home\\me\\a.apk"), "the wsl.localhost share is UNC");
+    check(is_unc_path("\\\\server\\share\\file.apk"), "a network share is UNC");
+    check(is_unc_path("//server/share"), "forward slashes count too");
+    check(!is_unc_path("C:\\packages\\a.apk"), "a local path is not UNC");
+    check(!is_unc_path("c:/packages/a.apk"), "a local path with forward slashes is not UNC");
+    check(!is_unc_path("\\\\?\\C:\\packages\\a.apk"), "the device prefix is not a share");
+    check(!is_unc_path(""), "an empty path is not UNC");
+    check(!is_unc_path("a.apk"), "a bare file name is not UNC");
+
+    // A local directory is used as it is; a UNC one is replaced, because cmd.exe
+    // cannot start in a UNC directory at all.
+    check(working_directory_for("C:\\packages") == "C:\\packages", "a local working directory is kept");
+    const std::string replaced = working_directory_for("\\\\wsl$\\Ubuntu\\home");
+    check(!replaced.empty() && !is_unc_path(replaced), "a UNC working directory is replaced: " + replaced);
+
+    // The replacement really works: cmd reports the directory it ended up in. Without
+    // the fix it answers C:\Windows after refusing the UNC path.
+    const apkinfo::process::Result inside = run_shell("cd", 20000, "\\\\wsl$\\Ubuntu\\home\\me");
+    check(inside.started, "a shell command starts with a UNC working directory");
+    check(inside.output.find("Windows") == std::string::npos,
+          "cmd did not fall back to the Windows directory (got: " + inside.output + ")");
+    check(inside.output.find("UNC") == std::string::npos, "cmd did not warn about UNC paths");
+
+    // A local preferred directory is honoured.
+    const apkinfo::process::Result local = run_shell("cd", 20000, "C:\\Windows");
+    check(local.started, "a local working directory works");
+    check(local.output.find("C:\\Windows") != std::string::npos,
+          "cmd started in the requested local directory (got: " + local.output + ")");
+}
+
 void test_prepare(const char* bundle) {
     // a plain package is installed as it is
     const apkinfo::install::Prepared single = apkinfo::install::prepare("C:\\a\\b.apk", apkinfo::ContainerKind::AndroidApk);
     check(single.ok() && single.files.size() == 1 && single.files[0] == "C:\\a\\b.apk",
           "a single apk is passed through");
     check(single.temp_dir.empty(), "nothing is extracted for a single apk");
+
+    // A package on a network share is copied out first, so adb never gets a UNC path.
+    // (The path does not have to exist for the decision, but the copy has to fail
+    // cleanly when it cannot be read.)
+    const apkinfo::install::Prepared from_share =
+        apkinfo::install::prepare("\\\\localhost\\C$\\does-not-exist.apk", apkinfo::ContainerKind::AndroidApk);
+    check(!from_share.ok() && from_share.error.find("share") != std::string::npos,
+          "an unreachable share is reported: " + from_share.error);
+    check(from_share.temp_dir.empty(), "the temporary directory is cleaned up on failure");
 
     // an Alpine package cannot be installed by the built-in installer
     const apkinfo::install::Prepared alpine =
@@ -211,6 +257,7 @@ int main(int argc, char** argv) {
     test_placeholders_documented();
     test_parse_devices();
     test_parse_mdns();
+    test_unc_paths();
     test_prepare(argc > 1 ? argv[1] : nullptr);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

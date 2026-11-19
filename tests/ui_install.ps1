@@ -316,6 +316,60 @@ try {
     }
 }
 finally { Stop-App $app }
+# ------------------------------------------------------- a package on a UNC share
+# WSL builds live on \\wsl.localhost\<distro>\..., and a UNC current directory makes
+# cmd.exe give up ("UNC paths are not supported") and continue in C:\Windows, which
+# broke the install command. The share here is the local C$ share, so the test needs no
+# WSL distribution - only admin rights to the administrative share.
+#
+#   $env:APKINFO_UNC_ROOT = "\\wsl.localhost\Ubuntu\home\me"   # to use a real WSL path
+$uncRoot = if ($env:APKINFO_UNC_ROOT) { $env:APKINFO_UNC_ROOT } else { "\\localhost\C$\Users\$env:USERNAME\AppData\Local\Temp\apkinfo-unc" }
+# the administrative share may simply not be reachable (no admin, no loopback share)
+$uncReachable = if ($env:APKINFO_UNC_ROOT) { Test-Path $env:APKINFO_UNC_ROOT } else { Test-Path "\\localhost\C$\Windows" }
+if ($uncReachable) {
+    New-Item -ItemType Directory -Force -Path $uncRoot | Out-Null
+    $uncPackage = Join-Path $uncRoot (Split-Path -Leaf $Package)
+    Copy-Item $Package $uncPackage -Force
+    Set-InstallConfig "command" 'cmd /c echo CWD=%CD% KIND={kind} FILE={file_name}'
+    $env:APKINFO_LANG = $Lang
+    $arguments = "`"$uncPackage`""
+    $process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru
+    $handle = [IntPtr]::Zero
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline -and $handle -eq [IntPtr]::Zero) {
+        Start-Sleep -Milliseconds 500
+        foreach ($entry in (Get-Windows $process.Id)) {
+            $parts = $entry -split '\|'
+            if ($parts[1] -match "APK Info") { $handle = [IntPtr][int64]$parts[0] }
+        }
+    }
+    $app = @{ Process = $process; Handle = $handle }
+    try {
+        Check ($handle -ne [IntPtr]::Zero) "a package on a UNC share opens"
+        if ($handle -ne [IntPtr]::Zero) {
+            $button = Toolbar-Button $handle 4
+            Click-At $button.X $button.Y $handle
+            $viewer = Take-OtherWindow $process.Id $handle
+            Check ($null -ne $viewer) "the install command runs for a package on a UNC share"
+            if ($null -ne $viewer) {
+                Start-Sleep -Milliseconds 1800
+                $lines = Get-Lines (Capture $viewer.Handle "40-unc-output").Path
+                $joined = ($lines | ForEach-Object { $_.Text }) -join " "
+                Check ($joined -match "CWD=.?[A-Za-z]:") "the command reported a drive-letter working directory ($joined)"
+                Check ($joined -notmatch "CWD=.?C:\\Windows") "cmd did not fall back to C:\\Windows ($joined)"
+                Check ($joined -notmatch "UNC paths are not supported") "cmd did not warn about the UNC path"
+                # OCR reads a capital I as a lowercase l ("KlND")
+                Check ($joined -match "K[Il]ND=(android|apks)") "the placeholders were expanded for the UNC package"
+                [void][UI]::SendMessageW($viewer.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+            }
+        }
+    }
+    finally { Stop-App $app }
+}
+else {
+    Write-Output "  (no UNC share reachable at $uncRoot - the UNC phase was skipped)"
+}
+
 Restore-Config
 
 Write-Output ""

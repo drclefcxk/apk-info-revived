@@ -34,6 +34,28 @@ std::string find_value(const InfoDocument& document, const std::string& label) {
 
 std::string file_size_text(uint64_t bytes) { return std::to_string(bytes); }
 
+// UTF-8 -> UTF-16, the conversion the Win32 calls here need (same convention as
+// FileMap and the process runner).
+std::wstring to_wide(const std::string& text) {
+    if (text.empty()) return {};
+    const int length = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    if (length <= 0) return {};
+    std::wstring wide(static_cast<size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, wide.data(), length);
+    wide.resize(static_cast<size_t>(length) - 1);
+    return wide;
+}
+
+// Copies one package out of a share; CopyFileW reports the reason, which matters
+// because "cannot copy" is what the user will see when a share is not accessible.
+bool copy_file(const std::string& from, const std::string& to, std::string* error) {
+    if (!CopyFileW(to_wide(from).c_str(), to_wide(to).c_str(), FALSE)) {
+        if (error) *error = "error " + std::to_string(GetLastError());
+        return false;
+    }
+    return true;
+}
+
 std::string unique_temp_dir() {
     std::error_code error;
     const std::filesystem::path base = std::filesystem::temp_directory_path(error);
@@ -176,6 +198,28 @@ Prepared prepare(const std::string& path, ContainerKind kind) {
         return prepared;
     }
     if (kind == ContainerKind::AndroidApk) {
+        // A package on a network share (a WSL build lives on \\wsl.localhost\...) is
+        // copied out first: adb gets an ordinary local file, which avoids every path
+        // quirk of the share and lets the install run while the share is slow.
+        if (process::is_unc_path(path)) {
+            prepared.temp_dir = unique_temp_dir();
+            if (prepared.temp_dir.empty()) {
+                prepared.error = "cannot create a temporary directory";
+                return prepared;
+            }
+            const std::string name = path_file_name(path);
+            const std::string copy = prepared.temp_dir + "\\" + (name.empty() ? "package.apk" : name);
+            std::string error;
+            if (!copy_file(path, copy, &error)) {
+                std::error_code ignored;
+                std::filesystem::remove_all(std::filesystem::path(prepared.temp_dir), ignored);
+                prepared.temp_dir.clear();
+                prepared.error = "cannot copy the package out of the share: " + error;
+                return prepared;
+            }
+            prepared.files.push_back(copy);
+            return prepared;
+        }
         prepared.files.push_back(path);
         return prepared;
     }
@@ -280,10 +324,22 @@ Outcome run_command(const std::string& command, const Context& context) {
         outcome.output = "no command is configured";
         return outcome;
     }
-    const process::Result result = process::run_shell(expanded, 900000);
+    // The package's own directory is the natural place for a command to run, so a
+    // relative path next to the package works. It cannot be used for a package on a
+    // network share (a WSL build lives on \\wsl$\...): cmd.exe cannot start in a UNC
+    // directory at all, so the temporary directory replaces it and {path} carries the
+    // absolute location.
+    const std::string directory = context.dir;
+    const process::Result result = process::run_shell(expanded, 900000, directory);
     outcome.output = result.output;
     if (!result.started && !result.error.empty()) outcome.output = result.error;
     if (result.timed_out) outcome.output += "\n(the command timed out)";
+    if (process::is_unc_path(directory) && !result.timed_out) {
+        // cmd.exe would otherwise have started in C:\Windows; say so, because relative
+        // paths in the command behave differently from a local package.
+        outcome.output = "(the package is on a network share, so the command ran in the temporary directory)\n" +
+                         outcome.output;
+    }
     outcome.success = result.exit_code == 0;
     if (outcome.output.empty()) {
         outcome.output = outcome.success ? "done" : "the command failed with exit code " + std::to_string(result.exit_code);

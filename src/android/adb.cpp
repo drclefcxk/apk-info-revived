@@ -143,7 +143,11 @@ Result invoke(const std::string& adb, const std::vector<std::string>& arguments,
         result.error = "adb was not found";
         return result;
     }
-    const process::Result raw = process::run(process::build_command_line(adb, arguments), timeout_ms);
+    // Never let adb inherit a UNC current directory: cmd.exe (and so anything adb
+    // shells out to) refuses one, and a package opened from a \\wsl$\ share is
+    // exactly that case.
+    const process::Result raw = process::run(process::build_command_line(adb, arguments), timeout_ms,
+                                            process::working_directory_for(std::string()));
     result.exit_code = raw.exit_code;
     result.output = raw.output;
     result.timed_out = raw.timed_out;

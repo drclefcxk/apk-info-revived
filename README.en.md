@@ -146,12 +146,12 @@ C++ silently, installs the three vcpkg ports, runs `build.ps1 -Clean`, smoke-tes
 result and publishes `build\Release` as `APK-Info-Revived-<tag>-win64.zip` on a release.
 
 ```powershell
-git tag v1.1.0
-git push origin v1.1.0        # triggers the release
+git tag v1.1.1
+git push origin v1.1.1        # triggers the release
 ```
 
 The workflow can also be started by hand from the Actions tab (`tag` defaults to
-`v1.1.0`). The smoke test generates a minimal Alpine v2 package with
+`v1.1.1`). The smoke test generates a minimal Alpine v2 package with
 `tests/make_smoke_package.py`, asserts the CLI recognises it and that a plain file is
 rejected — no sample packages or aapt2 toolchain needed.
 
@@ -220,6 +220,11 @@ The toolbar's **Install** button follows the settings:
   the temporary directory is removed afterwards.
 * Every adb call runs on a worker thread, so installing a large package never freezes
   the window.
+* **Network paths, WSL included**: a package on `\\wsl.localhost\<distro>\...` or on any
+  other share installs too. An external command runs in the temporary directory, because
+  `cmd.exe` cannot use a UNC current directory (it falls back to `C:\Windows`, which
+  breaks every relative path), and the built-in installer copies the package out of the
+  share first. The log says so when it happens.
 
 adb is looked up in `install.adbPath`, then `%ADB%`, `PATH`,
 `%ANDROID_HOME%`/`%ANDROID_SDK_ROOT%` and the usual SDK folders. When it cannot be
