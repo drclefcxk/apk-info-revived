@@ -58,8 +58,6 @@ OpenWrt 从 25.12 起使用 `apk`。下图展示在 APK Info 中打开 OpenWrt 2
 
 也可以在 **设置** 中为 Android 指定外部安装命令；Alpine 安装只使用外部命令，请按目标环境配置。设置页提供变量说明和当前包的命令预览。
 
-放在网络共享里的包同样可以安装，包括 WSL 里的构建产物（`\\wsl.localhost\<发行版>\…`）：外部命令会改在临时目录执行，内置安装器会先把包复制出来。
-
 <details>
 <summary>配置文件、adb 路径和命令变量</summary>
 
@@ -67,7 +65,7 @@ OpenWrt 从 25.12 起使用 `apk`。下图展示在 APK Info 中打开 OpenWrt 2
 
 `adb` 按此顺序查找：设置中指定的路径、`ADB`、`ANDROID_HOME`、`ANDROID_SDK_ROOT`、`PATH`，最后查找常见的 SDK 目录。
 
-外部命令直接启动（不经过 shell），沿用 APK Info 自己的工作目录，因此 `cmd.exe` 打不开的 UNC 路径（如 WSL 的 `\\wsl.localhost\…`）也能正常安装。常用变量有 `{path}`（包的完整路径）、`{exe_dir}`（ApkInfo.exe 所在目录，用于调用软件旁边的脚本）、`{file_name}`（文件名）、`{package_name}`（包名）、`{version}`（版本）、`{device}`（选中设备的序列号）和 `{adb}`（adb 路径）。路径可能含空格，在命令中使用 `"{path}"`。
+外部命令直接启动（不经过 shell），工作目录沿用 APK Info 自身，因此网络共享上的包（包括 WSL 里的构建产物 `\\wsl.localhost\…`）也能正常安装。常用变量有 `{path}`（包的完整路径）、`{exe_dir}`（ApkInfo.exe 所在目录，用于调用软件旁边的脚本）、`{file_name}`（文件名）、`{package_name}`（包名）、`{version}`（版本）、`{device}`（选中设备的序列号）和 `{adb}`（adb 路径）。路径可能含空格，在命令中使用 `"{path}"`。
 
 </details>
 

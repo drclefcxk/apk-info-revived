@@ -58,8 +58,6 @@ Open an Android package and click **Install** in the toolbar. The built-in insta
 
 You can also configure an external command for Android in **Settings**. Alpine installation always uses an external command; configure it for your target environment. Settings lists the available placeholders and previews the command for the open package.
 
-Packages on a network share install too, including builds made inside WSL (`\\wsl.localhost\<distro>\...`): an external command runs in the temporary directory, and the built-in installer copies the package out of the share first.
-
 <details>
 <summary>Configuration file, adb lookup, and command placeholders</summary>
 
@@ -67,7 +65,7 @@ The app creates `apkinfo-config.json` next to `ApkInfo.exe` on its first run. Th
 
 The app looks for `adb` in this order: the path in Settings, `ADB`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `PATH`, and common SDK directories.
 
-External commands are started directly (no shell) in APK Info's own working directory, so a UNC path - a WSL share such as `\\wsl.localhost\...` - installs fine. Common placeholders are `{path}` (full package path), `{exe_dir}` (the folder holding ApkInfo.exe, for scripts that ship next to it), `{file_name}` (file name), `{package_name}` (package name), `{version}` (version), `{device}` (selected device serial), and `{adb}` (adb path). Use `"{path}"` in your command to handle paths with spaces.
+External commands are started directly (no shell) with APK Info's own working directory, so packages on a network share - a WSL build on `\\wsl.localhost\...` included - install fine. Common placeholders are `{path}` (full package path), `{exe_dir}` (the folder holding ApkInfo.exe, for scripts that ship next to it), `{file_name}` (file name), `{package_name}` (package name), `{version}` (version), `{device}` (selected device serial), and `{adb}` (adb path). Use `"{path}"` in your command to handle paths with spaces.
 
 </details>
 
