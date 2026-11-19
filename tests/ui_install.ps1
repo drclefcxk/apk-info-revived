@@ -366,10 +366,13 @@ if ($uncReachable) {
     Copy-Item $Package $uncPackage -Force
     # No cmd.exe in the command: it is the one program that cannot start in a UNC
     # directory, and the runner now starts the command directly.
-    Set-InstallConfig "command" 'powershell -NoProfile -Command "Write-Output (''CWD='' + (Get-Location).Path + '' KIND={kind}'')"'
+    Set-InstallConfig "command" 'powershell -NoProfile -Command "Write-Output (''CWD='' + (Get-Location).Path + '' KIND={kind} PATH={path}'')"'
     $env:APKINFO_LANG = $Lang
-    $arguments = "`"$uncPackage`""
-    $process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru
+    # Opened by its bare file name while the app's own working directory is the share,
+    # which is what a shell in a WSL folder passes ("apkinfo bin/packages/.../x.apk").
+    # {path} has to come out absolute all the same.
+    $process = Start-Process -FilePath $Exe -ArgumentList "`"$(Split-Path -Leaf $uncPackage)`"" `
+             -WorkingDirectory $uncRoot -PassThru
     $handle = [IntPtr]::Zero
     $deadline = (Get-Date).AddSeconds(25)
     while ((Get-Date) -lt $deadline -and $handle -eq [IntPtr]::Zero) {
@@ -398,6 +401,8 @@ if ($uncReachable) {
                 Check ($joined -notmatch "UNC paths are not supported") "nothing complained about the UNC path"
                 # OCR reads a capital I as a lowercase l ("KlND")
                 Check ($joined -match "K[Il]ND=(android|apks)") "the placeholders were expanded for the UNC package"
+                Check ($joined -match "PATH=.?([A-Za-z]:|\\|localhost)") `
+                      "the package path is absolute even though it was opened relatively ($joined)"
                 [void][UI]::SendMessageW($viewer.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
             }
         }

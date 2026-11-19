@@ -76,6 +76,30 @@ std::string to_utf8(const wchar_t* text) {
     return out;
 }
 
+// The absolute form of a path the app was handed. A relative path would be resolved
+// against the process working directory, which is not what a command built from {path}
+// and {dir} needs: those are handed to another program, often with its own idea of the
+// working directory.
+std::string absolute_path(const std::string& utf8_path) {
+    if (utf8_path.empty()) return utf8_path;
+    const int wide_length = MultiByteToWideChar(CP_UTF8, 0, utf8_path.c_str(), -1, nullptr, 0);
+    if (wide_length <= 0) return utf8_path;
+    std::wstring wide(static_cast<size_t>(wide_length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8_path.c_str(), -1, wide.data(), wide_length);
+    if (!wide.empty() && wide.back() == L'\0') wide.pop_back();
+
+    std::wstring full(MAX_PATH, L'\0');
+    while (true) {
+        const DWORD written = GetFullPathNameW(wide.c_str(), static_cast<DWORD>(full.size()), full.data(), nullptr);
+        if (written == 0) return utf8_path;                      // leave it as it came
+        if (written < full.size()) {
+            full.resize(written);
+            return to_utf8(full.c_str());
+        }
+        full.resize(written + 1);                                // long path: grow
+    }
+}
+
 std::string compact_size(uint64_t bytes) {
     constexpr const char* units[] = {"B", "KiB", "MiB", "GiB"};
     double value = static_cast<double>(bytes);
@@ -1154,7 +1178,9 @@ int run(int argument_count, wchar_t** arguments) {
     auto state = std::make_shared<ViewState>();
 
     // Parse once; everything after this (language switch included) is re-render.
-    auto load = [ui, state](const std::string& path) {
+    auto load = [ui, state](const std::string& given) {
+        // absolute from here on: {path} and {dir} are passed to other programs
+        const std::string path = absolute_path(given);
         double elapsed_ms = 0;
         state->document = apkinfo::load_package(path, &elapsed_ms);
         state->elapsed_ms = elapsed_ms;
