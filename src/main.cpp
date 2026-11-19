@@ -601,8 +601,6 @@ std::string placeholder_help_text() {
         text += "  " + tr(token.second) + "\n";
     }
     return text;
-    text += "\n\n" + tr("A command is started directly (no cmd.exe), in the package's directory.");
-    text += "\n" + tr("\"&&\" chains steps; pipes, redirection and %VAR% need \"cmd /c ...\".");
 }
 
 void apply_install_chrome(InstallWindow& window, const ViewState& state) {
@@ -684,11 +682,16 @@ void apply_settings_chrome(SettingsWindow& window, const ViewState& state) {
             apkinfo::install::command_for_package(settings, state.document, state.adb_path, state.device);
         const bool alpine = state.document.kind == ContainerKind::AlpinePackage;
         window.set_preview_text(slint::SharedString(command));
-        window.set_note_text(slint::SharedString(
-            alpine ? tr("Alpine packages always use this command - the built-in installer is Android only.")
-                   : state.document.kind == ContainerKind::AndroidSplitBundle
-                         ? tr("A split bundle is installed with adb install-multiple in the built-in mode.")
-                         : ""));
+        // A command is not run through a shell, so what works - and what needs an
+        // explicit cmd /c - is said right under the preview.
+        std::string note = tr("A command is started directly (no cmd.exe), in the package's directory. "
+                              "\"&&\" chains steps; pipes, redirection and %VAR% need \"cmd /c ...\".");
+        if (alpine) {
+            note += "\n" + tr("Alpine packages always use this command - the built-in installer is Android only.");
+        } else if (state.document.kind == ContainerKind::AndroidSplitBundle) {
+            note += "\n" + tr("A split bundle is installed with adb install-multiple in the built-in mode.");
+        }
+        window.set_note_text(slint::SharedString(note));
     } else {
         window.set_preview_text(slint::SharedString(tr("(no package open)")));
         window.set_note_text(slint::SharedString(""));
