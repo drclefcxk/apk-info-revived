@@ -49,6 +49,8 @@ struct Context {
     std::string arch;          // ABIs / Alpine arch
     std::string device;        // the selected adb serial ("" when none)
     std::string adb;           // the adb executable in use ("" when not found)
+    std::string exe;           // full path of ApkInfo.exe itself
+    std::string exe_dir;       // the directory that contains it ("" when unknown)
 };
 
 // Defaults written into a fresh config file. Inline so that a translation unit which

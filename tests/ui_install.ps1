@@ -316,6 +316,40 @@ try {
     }
 }
 finally { Stop-App $app }
+# --------------------------------------------- a script that ships next to the exe
+# {exe_dir} is for commands that call something in the program's own folder; the command
+# below runs a .cmd written next to ApkInfo.exe for the duration of this check.
+$exeDir = Split-Path -Parent $Exe
+$probe = Join-Path $exeDir "apkinfo-exe-dir-probe.cmd"
+$probeBody = @"
+@echo off
+if /i "%~dp0"=="$exeDir\" (echo SAME-DIR) else (echo OTHER-DIR %~dp0)
+echo PROBE kind=%1
+"@
+Set-Content -Path $probe -Value $probeBody -Encoding ASCII
+try {
+    Set-InstallConfig "command" '"{exe_dir}\apkinfo-exe-dir-probe.cmd" {kind}'
+    $env:APKINFO_LANG = $Lang
+    $app = Start-App
+    try {
+        $button = Toolbar-Button $app.Handle 4
+        Click-At $button.X $button.Y $app.Handle
+        $viewer = Take-OtherWindow $app.Process.Id $app.Handle
+        Check ($null -ne $viewer) "a command can start a script next to the exe"
+        if ($null -ne $viewer) {
+            Start-Sleep -Milliseconds 1500
+            $joined = ((Get-Lines (Capture $viewer.Handle "50-exe-dir").Path) |
+                       ForEach-Object { $_.Text }) -join " "
+            Check ($joined -match "PROBE") "the script next to ApkInfo.exe ran ($joined)"
+            Check ($joined -match "kind=(android|apks)") "its argument came from the placeholder ($joined)"
+            Check ($joined -match "SAME-DIR") "the script ran from the exe's own directory ($joined)"
+            [void][UI]::SendMessageW($viewer.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+        }
+    }
+    finally { Stop-App $app }
+}
+finally { Remove-Item $probe -Force -ErrorAction SilentlyContinue }
+
 # ------------------------------------------------------- a package on a UNC share
 # WSL builds live on \\wsl.localhost\<distro>\..., and a UNC current directory makes
 # cmd.exe give up ("UNC paths are not supported") and continue in C:\Windows, which

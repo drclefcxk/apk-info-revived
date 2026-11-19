@@ -93,6 +93,17 @@ void test_expand() {
     check(apkinfo::install::expand("echo {path", context) == "echo {path", "unclosed brace is kept");
     check(apkinfo::install::expand("", context).empty(), "empty command stays empty");
 
+    // {exe} / {exe_dir}: the program's own location, so a command can start a script
+    // that ships next to ApkInfo.exe. Here the "program" is this test binary.
+    check(!context.exe.empty() && context.exe.find("test_install") != std::string::npos,
+          "exe is the running executable: " + context.exe);
+    check(!context.exe_dir.empty(), "exe_dir is known: " + context.exe_dir);
+    check(context.exe_dir.back() != '\\' && context.exe_dir.back() != '/', "exe_dir has no trailing separator");
+    check(context.exe.rfind(context.exe_dir, 0) == 0, "exe_dir is the directory of exe");
+    const std::string with_exe = apkinfo::install::expand("\"{exe_dir}\\scripts\\run.cmd\" {exe}", context);
+    check(with_exe.find("test_install.exe") != std::string::npos, "both tokens expand: " + with_exe);
+    check(with_exe.find("{exe") == std::string::npos, "no token is left behind: " + with_exe);
+
     // an Alpine document uses the Alpine command
     apkinfo::InfoDocument alpine = android_document();
     alpine.kind = apkinfo::ContainerKind::AlpinePackage;

@@ -33,6 +33,31 @@ std::string find_value(const InfoDocument& document, const std::string& label) {
 }
 std::string file_size_text(uint64_t bytes) { return std::to_string(bytes); }
 
+std::string to_utf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0,
+                                           nullptr, nullptr);
+    if (needed <= 0) return {};
+    std::string out(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), needed, nullptr, nullptr);
+    return out;
+}
+
+// The program's own location: a command may want to run a script that ships next to
+// ApkInfo.exe, which an absolute placeholder makes possible.
+std::wstring module_path() {
+    std::wstring buffer(MAX_PATH, L'\0');
+    while (true) {
+        const DWORD written = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (written == 0) return {};
+        if (written < buffer.size()) {
+            buffer.resize(written);
+            return buffer;
+        }
+        buffer.resize(buffer.size() * 2);   // long path: grow and ask again
+    }
+}
+
 std::string unique_temp_dir() {
     std::error_code error;
     const std::filesystem::path base = std::filesystem::temp_directory_path(error);
@@ -68,6 +93,8 @@ std::vector<std::pair<std::string, std::string>> placeholder_tokens() {
         {"{arch}", "ABIs / Alpine architecture"},
         {"{device}", "selected device serial"},
         {"{adb}", "the adb executable in use"},
+        {"{exe}", "full path of ApkInfo.exe"},
+        {"{exe_dir}", "the directory that contains ApkInfo.exe"},
     };
 }
 
@@ -87,6 +114,8 @@ std::string expand(const std::string& command, const Context& context) {
         {"arch", &context.arch},
         {"device", &context.device},
         {"adb", &context.adb},
+        {"exe", &context.exe},
+        {"exe_dir", &context.exe_dir},
     };
 
     std::string out;
@@ -165,6 +194,11 @@ Context make_context(const InfoDocument& document, const std::string& adb_path, 
     if (context.arch.empty()) context.arch = find_value(document, "ABIs");
     context.device = device;
     context.adb = adb_path;
+
+    const std::wstring module = module_path();
+    context.exe = to_utf8(module);
+    const size_t exe_slash = context.exe.find_last_of("\\/");
+    context.exe_dir = exe_slash == std::string::npos ? std::string() : context.exe.substr(0, exe_slash);
     return context;
 }
 
