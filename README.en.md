@@ -146,12 +146,12 @@ C++ silently, installs the three vcpkg ports, runs `build.ps1 -Clean`, smoke-tes
 result and publishes `build\Release` as `APK-Info-Revived-<tag>-win64.zip` on a release.
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0        # triggers the release
+git tag v1.1.0
+git push origin v1.1.0        # triggers the release
 ```
 
 The workflow can also be started by hand from the Actions tab (`tag` defaults to
-`v1.0.0`). The smoke test generates a minimal Alpine v2 package with
+`v1.1.0`). The smoke test generates a minimal Alpine v2 package with
 `tests/make_smoke_package.py`, asserts the CLI recognises it and that a plain file is
 rejected — no sample packages or aapt2 toolchain needed.
 

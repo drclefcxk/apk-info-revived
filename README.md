@@ -97,11 +97,11 @@ cmake --build build-ninja        # 同时生成 Slint 的 main.h
 `.github/workflows/release.yml` 在 `windows-latest` 上把本项目的构建流程重放一遍：静默安装 Slint C++、用 vcpkg 装三件套、`build.ps1 -Clean`、冒烟测试，然后把 `build\Release` 打包成 `APK-Info-Revived-<tag>-win64.zip` 并作为 Release 资产发布。
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0        # 触发发布
+git tag v1.1.0
+git push origin v1.1.0        # 触发发布
 ```
 
-也可以在 Actions 页面手动 Run workflow（`tag` 默认 `v1.0.0`）。冒烟测试用 `tests/make_smoke_package.py` 现场生成一个最小 Alpine v2 包，断言 CLI 能识别它、并把普通文件判为"无法识别"，因此不需要任何样例包或 aapt2 工具链。
+也可以在 Actions 页面手动 Run workflow（`tag` 默认 `v1.1.0`）。冒烟测试用 `tests/make_smoke_package.py` 现场生成一个最小 Alpine v2 包，断言 CLI 能识别它、并把普通文件判为"无法识别"，因此不需要任何样例包或 aapt2 工具链。
 
 ## 使用
 

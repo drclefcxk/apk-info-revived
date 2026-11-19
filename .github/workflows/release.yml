@@ -2,8 +2,8 @@ name: release
 
 # Builds the Windows x64 binaries and publishes them as a release.
 #
-#   * push a tag:      git tag v1.0.0 && git push origin v1.0.0
-#   * or run it by hand: Actions -> release -> Run workflow (the tag defaults to v1.0.0)
+#   * push a tag:      git tag v1.1.0 && git push origin v1.1.0
+#   * or run it by hand: Actions -> release -> Run workflow (the tag defaults to v1.1.0)
 #
 # The job mirrors a local build: Slint C++ (prebuilt, installed silently), the three
 # vcpkg ports, then .\build.ps1. The release archive is the build output directory
@@ -18,7 +18,7 @@ on:
       tag:
         description: "Tag to publish under"
         required: false
-        default: "v1.0.0"
+        default: "v1.1.0"
 
 permissions:
   contents: write
@@ -119,7 +119,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
-          if (-not $version) { $version = "v1.0.0" }
+          if (-not $version) { $version = "v1.1.0" }
           $archiveName = "APK-Info-Revived-$version-win64"
           $stage = Join-Path "dist" $archiveName
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
