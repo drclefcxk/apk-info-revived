@@ -65,6 +65,7 @@ component ToolbarButton inherits Rectangle {
 // trick the main toolbar uses).
 component StripButton inherits Rectangle {
     in property <string> text;
+    in property <bool> actionable: true;
     callback clicked();
     background: transparent;
 
@@ -74,6 +75,7 @@ component StripButton inherits Rectangle {
         height: 30px;
         y: (parent.height - self.height) / 2;
         text: root.text;
+        enabled: root.actionable;
         clicked => { root.clicked(); }
     }
 }
@@ -244,7 +246,7 @@ export component MainWindow inherits Window {
             Rectangle {
                 x: 18px;
                 y: 0px;
-                width: parent.width - 18px - 814px;
+                width: parent.width - 18px - 692px;
                 height: 100%;
                 background: transparent;
                 HorizontalLayout {
@@ -274,14 +276,19 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // right: copy / dump / export / install / reload / open / settings
-            // (88 + 88 + 104 + 96 + 88 + 148 + 88 + 6*10 = 760)
+            // right: settings / copy / dump / reload / install / open
+            // (88 + 88 + 88 + 88 + 96 + 148 + 5*10 = 646)
             HorizontalLayout {
-                x: parent.width - 778px;
+                x: parent.width - 664px;
                 y: 0px;
-                width: 760px;
+                width: 646px;
                 height: 100%;
                 spacing: 10px;
+                ToolbarButton {
+                    width: 88px;
+                    text: root.label-settings;
+                    clicked => { root.settings-requested(); }
+                }
                 ToolbarButton {
                     width: 88px;
                     text: root.label-copy-all;
@@ -293,10 +300,9 @@ export component MainWindow inherits Window {
                     clicked => { root.dump-requested(); }
                 }
                 ToolbarButton {
-                    width: 104px;
-                    text: root.label-export-icon;
-                    actionable: root.has-icon;
-                    clicked => { root.export-icon-requested(); }
+                    width: 88px;
+                    text: root.label-reload;
+                    clicked => { root.reload-requested(); }
                 }
                 ToolbarButton {
                     width: 96px;
@@ -306,20 +312,10 @@ export component MainWindow inherits Window {
                     clicked => { root.install-requested(); }
                 }
                 ToolbarButton {
-                    width: 88px;
-                    text: root.label-reload;
-                    clicked => { root.reload-requested(); }
-                }
-                ToolbarButton {
                     width: 148px;
                     text: root.label-open;
                     primary: true;
                     clicked => { root.open-requested(); }
-                }
-                ToolbarButton {
-                    width: 88px;
-                    text: root.label-settings;
-                    clicked => { root.settings-requested(); }
                 }
             }
         }
@@ -378,6 +374,14 @@ export component MainWindow inherits Window {
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
+                    }
+                    // Saving the icon belongs next to the icon itself, not in the
+                    // toolbar: it acts on what is shown right above it.
+                    StripButton {
+                        height: 30px;
+                        text: root.label-export-icon;
+                        actionable: root.has-icon;
+                        clicked => { root.export-icon-requested(); }
                     }
                     Text {
                         text: root.app-title;
@@ -1149,6 +1153,44 @@ export component SettingsWindow inherits Window {
                     }
                 }
 
+                // -------- adb
+                // It is shared by both install methods, so it gets a card of its own
+                // instead of trailing the Alpine command.
+                Rectangle {
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e3e6ea;
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 8px;
+                        Text {
+                            height: 20px;
+                            text: "adb";
+                            font-size: 12px;
+                            font-weight: 700;
+                            color: #6b7480;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            height: 20px;
+                            text: root.label-adb;
+                            font-size: 12px;
+                            color: #74808f;
+                            vertical-alignment: center;
+                        }
+                        HorizontalLayout {
+                            height: 30px;
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text: root.adb-path;
+                                placeholder-text: "C:\\platform-tools\\adb.exe";
+                                edited(text) => { root.adb-path-edited(text); }
+                            }
+                        }
+                    }
+                }
+
                 // -------- android
                 Rectangle {
                     background: #ffffff;
@@ -1251,22 +1293,6 @@ export component SettingsWindow inherits Window {
                                 text: root.alpine-command;
                                 font-size: 12px;
                                 edited(text) => { root.alpine-command-edited(text); }
-                            }
-                        }
-                        Text {
-                            height: 20px;
-                            text: root.label-adb;
-                            font-size: 12px;
-                            color: #74808f;
-                            vertical-alignment: center;
-                        }
-                        HorizontalLayout {
-                            height: 30px;
-                            LineEdit {
-                                horizontal-stretch: 1;
-                                text: root.adb-path;
-                                placeholder-text: "C:\\platform-tools\\adb.exe";
-                                edited(text) => { root.adb-path-edited(text); }
                             }
                         }
                     }

@@ -26,6 +26,15 @@ if (-not (Test-Path $Exe)) { throw "missing $Exe - build first (.\build.ps1)" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $configFile = Join-Path (Split-Path -Parent $Exe) "apkinfo-config.json"
+# The run rewrites the configuration, so it is put back afterwards.
+$configBackup = Join-Path $env:TEMP "apkinfo-config-install-test.json"
+if (Test-Path $configFile) { Copy-Item $configFile $configBackup -Force }
+function Restore-Config {
+    if (Test-Path $configBackup) {
+        Copy-Item $configBackup $configFile -Force
+        Remove-Item $configBackup -Force
+    }
+}
 # A small, always valid document is written before every run: editing the file the
 # application produced would mean re-serialising a document that contains escaped
 # quotes and a _readme block, and a broken edit silently falls back to the defaults
@@ -173,15 +182,15 @@ function Click-At([int]$x, [int]$y, [IntPtr]$hwnd) {
     Start-Sleep -Milliseconds 700
 }
 
-# The toolbar cluster starts at (client width / 1.25) - 778 logical pixels.
+# The toolbar cluster starts at (client width / 1.25) - 664 logical pixels.
 function Toolbar-Button([IntPtr]$hwnd, [int]$indexFromLeft) {
     $client = New-Object UI+RECT
     [void][UI]::GetClientRect($hwnd, [ref]$client)
     $scale = 1.25
-    $start = ($client.Right - $client.Left) / $scale - 778
-    # copy(88) dump(88) export(104) install(96) reload(88) open(148) settings(88), 10px gaps
-    $offsets = @(0, 98, 196, 310, 416, 514, 672)
-    $widths = @(88, 88, 104, 96, 88, 148, 88)
+    $start = ($client.Right - $client.Left) / $scale - 664
+    # settings(88) copy(88) dump(88) reload(88) install(96) open(148), 10px gaps
+    $offsets = @(0, 98, 196, 294, 392, 498)
+    $widths = @(88, 88, 88, 88, 96, 148)
     $logical = $start + $offsets[$indexFromLeft] + $widths[$indexFromLeft] / 2
     $rect = New-Object UI+RECT
     [void][UI]::GetWindowRect($hwnd, [ref]$rect)
@@ -223,7 +232,7 @@ Write-Output "install page + settings page ($Lang)"
 # ---------------------------------------------------------------- install page
 $app = Start-App
 try {
-    $button = Toolbar-Button $app.Handle 3          # "Install"
+    $button = Toolbar-Button $app.Handle 4          # "Install"
     Click-At $button.X $button.Y $app.Handle
     $page = Take-OtherWindow $app.Process.Id $app.Handle
     Check ($null -ne $page) "the install page opens"
@@ -263,7 +272,7 @@ finally { Stop-App $app }
 # --------------------------------------------------------------- settings page
 $app = Start-App
 try {
-    $button = Toolbar-Button $app.Handle 6          # "Settings"
+    $button = Toolbar-Button $app.Handle 0          # "Settings"
     Click-At $button.X $button.Y $app.Handle
     $page = Take-OtherWindow $app.Process.Id $app.Handle
     Check ($null -ne $page) "the settings page opens"
@@ -292,7 +301,7 @@ finally { Stop-App $app }
 Set-InstallConfig "command" 'cmd /c echo CMD-OK {kind} {file_name}'
 $app = Start-App
 try {
-    $button = Toolbar-Button $app.Handle 3
+    $button = Toolbar-Button $app.Handle 4
     Click-At $button.X $button.Y $app.Handle
     $viewer = Take-OtherWindow $app.Process.Id $app.Handle
     Check ($null -ne $viewer) "command mode opens an output window"
@@ -307,7 +316,7 @@ try {
     }
 }
 finally { Stop-App $app }
-Set-InstallConfig "builtin" $null
+Restore-Config
 
 Write-Output ""
 if ($failed -eq 0) { Write-Output "== all install-page checks passed"; exit 0 }

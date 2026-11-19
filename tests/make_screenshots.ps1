@@ -385,15 +385,15 @@ if ($null -ne $alpineTree) {
 # 8. the install page and the settings page
 $app = Start-App $Bundle "zh"
 try {
-    # the toolbar cluster is explicit geometry; Settings is the last button
+    # the toolbar cluster is explicit geometry; Settings is the first button
     $client = New-Object Shot+RECT
     [void][Shot]::GetClientRect($app.Handle, [ref]$client)
     $scale = 1.25
-    $clusterStart = ($client.Right - $client.Left) / $scale - 778
+    $clusterStart = ($client.Right - $client.Left) / $scale - 664
     $rect = New-Object Shot+RECT
     [void][Shot]::GetWindowRect($app.Handle, [ref]$rect)
 
-    $installX = [int]($rect.Left + ($clusterStart + 310 + 48) * $scale)
+    $installX = [int]($rect.Left + ($clusterStart + 392 + 48) * $scale)
     Click-At $installX ($rect.Top + 70) $app.Handle
     $page = [IntPtr]::Zero
     $deadline = (Get-Date).AddSeconds(12)
@@ -424,7 +424,7 @@ try {
         Start-Sleep -Milliseconds 800
     }
 
-    $settingsX = [int]($rect.Left + ($clusterStart + 672 + 44) * $scale)
+    $settingsX = [int]($rect.Left + ($clusterStart + 44) * $scale)
     Click-At $settingsX ($rect.Top + 70) $app.Handle
     Start-Sleep -Seconds 2
     $script:foundPage = [IntPtr]::Zero

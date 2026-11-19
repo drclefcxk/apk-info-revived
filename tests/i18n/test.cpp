@@ -65,6 +65,18 @@ int main() {
     check(std::strcmp(tr("a string that is not in the dictionary"), "a string that is not in the dictionary") == 0,
           "unknown strings fall back to English");
 
+    // A forced language (--lang / APKINFO_LANG) wins over the saved preference, but only
+    // until the preference is set again - set_preference() is what the settings page
+    // calls, and picking there must supersede the command line.
+    set_preference(Preference::Chinese);
+    check(current() == Language::Chinese, "the saved preference decides");
+    set_language(Language::English);
+    check(current() == Language::English, "a forced language beats the saved preference");
+    check(std::strcmp(tr("Version code"), "Version code") == 0, "the forced language is used for lookups");
+    set_preference(Preference::Chinese);
+    check(current() == Language::Chinese, "setting the preference again supersedes the override");
+    set_preference(Preference::Auto);
+
     // Language parsing
     Language parsed = Language::English;
     check(from_code("zh", &parsed) && parsed == Language::Chinese, "from_code(zh)");

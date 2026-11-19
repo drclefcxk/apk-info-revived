@@ -256,7 +256,12 @@ function Get-AppWindows([int]$processId) {
 function ConvertTo-Handle([string]$entry) { [IntPtr][int64](($entry -split '\|')[0]) }
 
 function Start-App([string]$path) {
-    $process = Start-Process -FilePath $Exe -ArgumentList "`"$path`"" -PassThru
+    # an empty path starts the empty state (no package, so no arguments at all)
+    if ($path) {
+        $process = Start-Process -FilePath $Exe -ArgumentList "`"$path`"" -PassThru
+    } else {
+        $process = Start-Process -FilePath $Exe -PassThru
+    }
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Milliseconds 300
@@ -520,7 +525,8 @@ try {
     $shot = Capture $app.Handle "50-export"
     $toolLines = Get-Lines $shot.Path
     $exportButton = $toolLines | Where-Object { $_.Text -match "^Export|^导\s*出" } | Select-Object -First 1
-    Check ($null -ne $exportButton) "the 'Export icon' button is in the toolbar"
+    Check ($null -ne $exportButton -and $exportButton.Y -gt 200) `
+          "the 'Export icon' button sits under the icon preview (y=$($exportButton.Y))"
 
     if ($null -ne $exportButton) {
         [void][UiFlow]::SetForegroundWindow($app.Handle)
@@ -572,15 +578,15 @@ $configFile = Join-Path (Split-Path -Parent $Exe) "apkinfo-config.json"
 $app = Start-App $Single
 try {
     $shot = Capture $app.Handle "60-toolbar"
-    # The toolbar cluster is explicit geometry: copy(88) dump(88) export(104)
-    # install(96) reload(88) open(148) settings(88) with 10px gaps, pinned to the right
-    # edge at (client width / 1.25) - 778 logical pixels. OCR reliably misses the small
+    # The toolbar cluster is explicit geometry: settings(88) copy(88) dump(88)
+    # reload(88) install(96) open(148) with 10px gaps, pinned to the right edge at
+    # (client width / 1.25) - 664 logical pixels. OCR reliably misses the small
     # secondary buttons, so the position is computed instead of guessed from text.
     $client = New-Object UiFlow+RECT
     [void][UiFlow]::GetClientRect($app.Handle, [ref]$client)
     $scale = 1.25
-    $clusterStart = ($client.Right - $client.Left) / $scale - 778
-    $settingsX = [int]($shot.Rect.Left + ($clusterStart + 672 + 44) * $scale)
+    $clusterStart = ($client.Right - $client.Left) / $scale - 664
+    $settingsX = [int]($shot.Rect.Left + ($clusterStart + 44) * $scale)
     $settingsY = $shot.Rect.Top + 70
     Check ($client.Right - $client.Left -gt 0) "the toolbar cluster is measurable"
 
@@ -647,6 +653,28 @@ try {
     }
 }
 finally { Stop-App $app }
+
+# ------------------------------------- phase G: the empty state is localised too
+$env:APKINFO_LANG = "zh"
+$app = Start-App ""
+try {
+    $shot = Capture $app.Handle "70-empty-zh"
+    $lines = Get-Lines $shot.Path
+    Check (@($lines | Where-Object { $_.Text -match "未\s*加\s*载|Nothing\s*loaded" }).Count -ge 1) `
+          "the empty state title is localised"
+    Check (@($lines | Where-Object { $_.Text -match "打\s*开\s*包|Open\s*package" }).Count -ge 1) `
+          "the empty state hint is localised"
+    Check (@($lines | Where-Object { $_.Text -match "Contents" }).Count -eq 0) `
+          "the contents tab is not left in English"
+} 
+finally { Stop-App $app }
+
+# leave the developer's interface in "follow the system" instead of English
+if (Test-Path $configFile) {
+    $document = Get-Content $configFile -Raw | ConvertFrom-Json
+    $document.language = "auto"
+    $document | ConvertTo-Json -Depth 12 | Set-Content -Path $configFile -Encoding UTF8
+}
 
 Remove-Item Env:\APKINFO_LANG -ErrorAction SilentlyContinue
 Remove-Item Env:\APKINFO_START_TAB -ErrorAction SilentlyContinue

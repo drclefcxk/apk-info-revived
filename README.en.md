@@ -257,14 +257,16 @@ Alpine : adb push "{path}" /tmp/{file_name} && adb shell apk add --allow-untrust
 
 ## Settings
 
-The **Settings** button on the far right of the toolbar opens the settings page (the
+The **Settings** button - the leftmost one in the toolbar, which reads (from the right)
+Open package…, Install, Reload, Dump…, Copy all, Settings - opens the settings page (the
 language moved here from the toolbar):
 
 * **Language**: follow the system / 中文 / English.
+* **adb**: the adb path, empty means "look it up" (shared by Android and Alpine, so it has
+  a card of its own).
 * **Android install method**: built-in installer or external command, each with its
   command line.
 * **Alpine install command**: Alpine packages can only use an external command.
-* **adb path**: empty means "look it up".
 * **Placeholder reference** and a **preview for the open package**, so a command can be
   checked before saving.
 
@@ -306,12 +308,13 @@ rebuild:
 
 ## Localisation
 
-The toolbar has a language dropdown with three entries — *follow the system*, 中文,
-English — and the choice is stored in `apkinfo-config.json`, so the default is "follow the
-Windows UI language" until you pick something else.
+The settings page has a language dropdown with three entries — *follow the system*,
+中文, English — and the choice is stored in `apkinfo-config.json`, so the default is
+"follow the Windows UI language" until you pick something else. Saving re-renders the
+open document immediately (the package is not re-read).
 
 * Every user-visible string goes through `TR("English source")`; the dictionary in
-  `src/i18n.cpp` holds 169 entries, and the test suite asserts there are no duplicate
+  `src/i18n.cpp` holds 229 entries, and the test suite asserts there are no duplicate
   keys and that every translation differs from its source string.
 * `--lang zh|en` and the `APKINFO_LANG` environment variable still override the preference
   **for one run**, which is what the tests use.
@@ -397,7 +400,7 @@ Unit/parser tests (`run_tests.ps1`, 9 modules):
 | axml | 453 lines | line-by-line cross-check against aapt2's `xmltree` output |
 | arsc | 53 | resource table parsing, 42 276 ids cross-checked, density/locale selection |
 | alpine | 104 | v3 `adb` and v2 tar parsing, dependency relations, signature blocks |
-| i18n | 469 | dictionary completeness, no duplicate keys, translations differ from sources |
+| i18n | 473 | dictionary completeness, no duplicate keys, translations differ from sources |
 | tree | 40 | tree building: contiguous children, subtree sizes, path assembly |
 | report | 29 | text and JSON report formats |
 | versions | 12 | legacy version-table parsing, built-in fallback |

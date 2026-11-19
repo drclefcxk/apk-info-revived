@@ -577,8 +577,10 @@ void position_viewer_over_main(slint::ComponentHandle<TextViewer>& viewer, int a
     }
 }
 
-// apply_chrome is defined further down; the install/settings helpers below use it.
+// apply_chrome / apply_empty_state are defined further down; the install and settings
+// helpers below use them.
 void apply_chrome(MainWindow& ui);
+void apply_empty_state(MainWindow& ui);
 
 // ---------------------------------------------------------------------------
 // Install page and settings page
@@ -1003,7 +1005,11 @@ void show_settings_window(std::shared_ptr<ViewState> state, slint::ComponentHand
             state->adb_path = apkinfo::adb::find_adb(config.install.adb_path);
 
             apply_chrome(*host);
-            if (state->loaded) apply_view(*host, *state);
+            if (state->loaded) {
+                apply_view(*host, *state);
+            } else {
+                apply_empty_state(*host);
+            }
             if (state->install_window) apply_install_chrome(**state->install_window, *state);
             apply_settings_chrome(*window, *state);
             window->hide();
@@ -1072,6 +1078,17 @@ void apply_chrome(MainWindow& ui) {
     ui.set_label_settings(slint::SharedString(tr("Settings")));
 }
 
+// The texts of the "no package" state. Kept in one place because they have to be
+// re-applied when the language changes while nothing is loaded: apply_view is what
+// normally pushes localised text, and it does not run without a document.
+void apply_empty_state(MainWindow& ui) {
+    ui.set_status_text(slint::SharedString(tr("Open an .apk, .apks, .apkm or Alpine .apk package")));
+    ui.set_app_title(slint::SharedString(tr("Nothing loaded")));
+    ui.set_app_subtitle(slint::SharedString(tr("Use “Open package…” or pass a path on the command line.")));
+    // the tab label would otherwise stay at its English default
+    ui.set_contents_title(slint::SharedString(tr("Contents")));
+}
+
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
@@ -1095,8 +1112,18 @@ void start_hash(ViewState* state, MainWindow* ui) {
 }  // namespace
 
 int run(int argument_count, wchar_t** arguments) {
-    // --lang zh|en (also honoured through APKINFO_LANG) picks the UI language;
+    // The config file holds the language preference, and it has to be applied *first*:
+    // set_preference() clears the "forced for this run" flag, so applying it afterwards
+    // would silently undo --lang / APKINFO_LANG.
+    apkinfo::i18n::set_preference(static_cast<apkinfo::i18n::Preference>(apkinfo::config().language));
+
+    // APKINFO_LANG forces the language for this run, then --lang overrides even that;
     // anything else is treated as the package path to open.
+    if (const char* forced = std::getenv("APKINFO_LANG"); forced && *forced) {
+        apkinfo::i18n::Language parsed = apkinfo::i18n::current();
+        if (apkinfo::i18n::from_code(forced, &parsed)) apkinfo::i18n::set_language(parsed);
+    }
+
     std::string path_to_open;
     for (int i = 1; i < argument_count; ++i) {
         const std::string argument = to_utf8(arguments[i]);
@@ -1116,10 +1143,6 @@ int run(int argument_count, wchar_t** arguments) {
         }
         if (path_to_open.empty()) path_to_open = argument;
     }
-
-    // The config file decides the language preference; --lang / APKINFO_LANG still win
-    // for this run because set_language() marks itself as an override.
-    apkinfo::i18n::set_preference(static_cast<apkinfo::i18n::Preference>(apkinfo::config().language));
 
     auto handle = MainWindow::create();
     MainWindow* ui = &*handle;
@@ -1311,10 +1334,7 @@ int run(int argument_count, wchar_t** arguments) {
     if (!path_to_open.empty()) {
         load(path_to_open);
     } else {
-        ui->set_status_text(slint::SharedString(tr("Open an .apk, .apks, .apkm or Alpine .apk package")));
-        ui->set_app_title(slint::SharedString(tr("Nothing loaded")));
-        ui->set_app_subtitle(slint::SharedString(tr("Use “Open package…” or pass a path on the command line.")));
-
+        apply_empty_state(*ui);
         ui->set_has_icon(false);
         ui->set_rows(std::make_shared<slint::VectorModel<InfoRowItem>>(std::vector<InfoRowItem>{}));
         set_window_icon(ContainerKind::Unknown);
