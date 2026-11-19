@@ -31,30 +31,7 @@ std::string find_value(const InfoDocument& document, const std::string& label) {
     }
     return {};
 }
-
 std::string file_size_text(uint64_t bytes) { return std::to_string(bytes); }
-
-// UTF-8 -> UTF-16, the conversion the Win32 calls here need (same convention as
-// FileMap and the process runner).
-std::wstring to_wide(const std::string& text) {
-    if (text.empty()) return {};
-    const int length = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
-    if (length <= 0) return {};
-    std::wstring wide(static_cast<size_t>(length), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, wide.data(), length);
-    wide.resize(static_cast<size_t>(length) - 1);
-    return wide;
-}
-
-// Copies one package out of a share; CopyFileW reports the reason, which matters
-// because "cannot copy" is what the user will see when a share is not accessible.
-bool copy_file(const std::string& from, const std::string& to, std::string* error) {
-    if (!CopyFileW(to_wide(from).c_str(), to_wide(to).c_str(), FALSE)) {
-        if (error) *error = "error " + std::to_string(GetLastError());
-        return false;
-    }
-    return true;
-}
 
 std::string unique_temp_dir() {
     std::error_code error;
@@ -198,28 +175,6 @@ Prepared prepare(const std::string& path, ContainerKind kind) {
         return prepared;
     }
     if (kind == ContainerKind::AndroidApk) {
-        // A package on a network share (a WSL build lives on \\wsl.localhost\...) is
-        // copied out first: adb gets an ordinary local file, which avoids every path
-        // quirk of the share and lets the install run while the share is slow.
-        if (process::is_unc_path(path)) {
-            prepared.temp_dir = unique_temp_dir();
-            if (prepared.temp_dir.empty()) {
-                prepared.error = "cannot create a temporary directory";
-                return prepared;
-            }
-            const std::string name = path_file_name(path);
-            const std::string copy = prepared.temp_dir + "\\" + (name.empty() ? "package.apk" : name);
-            std::string error;
-            if (!copy_file(path, copy, &error)) {
-                std::error_code ignored;
-                std::filesystem::remove_all(std::filesystem::path(prepared.temp_dir), ignored);
-                prepared.temp_dir.clear();
-                prepared.error = "cannot copy the package out of the share: " + error;
-                return prepared;
-            }
-            prepared.files.push_back(copy);
-            return prepared;
-        }
         prepared.files.push_back(path);
         return prepared;
     }
@@ -316,6 +271,38 @@ Outcome run_builtin(const Settings& settings, const std::string& adb, const std:
     return outcome;
 }
 
+std::vector<std::string> split_steps(const std::string& command) {
+    std::vector<std::string> steps;
+    std::string current;
+    bool in_quotes = false;
+    for (size_t i = 0; i < command.size(); ++i) {
+        const char c = command[i];
+        if (c == '"') {
+            in_quotes = !in_quotes;
+            current.push_back(c);
+            continue;
+        }
+        if (!in_quotes && c == '&' && i + 1 < command.size() && command[i + 1] == '&') {
+            steps.push_back(current);   // an empty step is dropped below
+            current.clear();
+            ++i;
+            continue;
+        }
+        current.push_back(c);
+    }
+    steps.push_back(current);
+
+    // trim and drop the empty pieces ("a && && b")
+    std::vector<std::string> trimmed;
+    for (std::string& step : steps) {
+        const size_t first = step.find_first_not_of(" \t\r\n");
+        const size_t last = step.find_last_not_of(" \t\r\n");
+        if (first == std::string::npos) continue;
+        trimmed.push_back(step.substr(first, last - first + 1));
+    }
+    return trimmed;
+}
+
 Outcome run_command(const std::string& command, const Context& context) {
     Outcome outcome;
     const std::string expanded = expand(command, context);
@@ -324,25 +311,35 @@ Outcome run_command(const std::string& command, const Context& context) {
         outcome.output = "no command is configured";
         return outcome;
     }
-    // The package's own directory is the natural place for a command to run, so a
-    // relative path next to the package works. It cannot be used for a package on a
-    // network share (a WSL build lives on \\wsl$\...): cmd.exe cannot start in a UNC
-    // directory at all, so the temporary directory replaces it and {path} carries the
-    // absolute location.
-    const std::string directory = context.dir;
-    const process::Result result = process::run_shell(expanded, 900000, directory);
-    outcome.output = result.output;
-    if (!result.started && !result.error.empty()) outcome.output = result.error;
-    if (result.timed_out) outcome.output += "\n(the command timed out)";
-    if (process::is_unc_path(directory) && !result.timed_out) {
-        // cmd.exe would otherwise have started in C:\Windows; say so, because relative
-        // paths in the command behave differently from a local package.
-        outcome.output = "(the package is on a network share, so the command ran in the temporary directory)\n" +
-                         outcome.output;
+    // Each step runs in the package's own directory - including a UNC one such as
+    // \\wsl.localhost\<distro>\..., which CreateProcessW starts in happily and cmd.exe
+    // never could.
+    const std::vector<std::string> steps = split_steps(expanded);
+    const bool many = steps.size() > 1;
+    std::string output;
+    int exit_code = 0;
+    bool timed_out = false;
+    for (const std::string& step : steps) {
+        const process::Result result = process::run(step, 900000, context.dir);
+        if (many) output += (output.empty() ? "" : "\n") + std::string("> ") + step + "\n";
+        if (!result.started && !result.error.empty()) {
+            output += result.error;
+            outcome.output = output;
+            return outcome;
+        }
+        output += result.output;
+        exit_code = result.exit_code;
+        if (result.timed_out) {
+            timed_out = true;
+            break;
+        }
+        if (exit_code != 0) break;   // && semantics: stop at the first failure
     }
-    outcome.success = result.exit_code == 0;
+    outcome.output = output;
+    if (timed_out) outcome.output += "\n(the command timed out)";
+    outcome.success = exit_code == 0 && !timed_out;
     if (outcome.output.empty()) {
-        outcome.output = outcome.success ? "done" : "the command failed with exit code " + std::to_string(result.exit_code);
+        outcome.output = outcome.success ? "done" : "the command failed with exit code " + std::to_string(exit_code);
     }
     return outcome;
 }

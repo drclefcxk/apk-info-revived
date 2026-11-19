@@ -97,6 +97,11 @@ Outcome run_builtin(const Settings& settings, const std::string& adb, const std:
                     const std::string& path, ContainerKind kind);
 
 // The configured command line, expanded and run through cmd.exe.
+// Splits a command line on "&&" into the steps to run in order (separators inside
+// quotes are left alone). Each step goes to CreateProcessW as it is - there is no
+// shell, which is what makes a UNC working directory such as a WSL share work.
+std::vector<std::string> split_steps(const std::string& command);
+
 Outcome run_command(const std::string& command, const Context& context);
 
 // The command a package would run in command mode, already expanded (settings page

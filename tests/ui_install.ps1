@@ -330,7 +330,9 @@ if ($uncReachable) {
     New-Item -ItemType Directory -Force -Path $uncRoot | Out-Null
     $uncPackage = Join-Path $uncRoot (Split-Path -Leaf $Package)
     Copy-Item $Package $uncPackage -Force
-    Set-InstallConfig "command" 'cmd /c echo CWD=%CD% KIND={kind} FILE={file_name}'
+    # No cmd.exe in the command: it is the one program that cannot start in a UNC
+    # directory, and the runner now starts the command directly.
+    Set-InstallConfig "command" 'powershell -NoProfile -Command "Write-Output (''CWD='' + (Get-Location).Path + '' KIND={kind}'')"'
     $env:APKINFO_LANG = $Lang
     $arguments = "`"$uncPackage`""
     $process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru
@@ -355,9 +357,11 @@ if ($uncReachable) {
                 Start-Sleep -Milliseconds 1800
                 $lines = Get-Lines (Capture $viewer.Handle "40-unc-output").Path
                 $joined = ($lines | ForEach-Object { $_.Text }) -join " "
-                Check ($joined -match "CWD=.?[A-Za-z]:") "the command reported a drive-letter working directory ($joined)"
-                Check ($joined -notmatch "CWD=.?C:\\Windows") "cmd did not fall back to C:\\Windows ($joined)"
-                Check ($joined -notmatch "UNC paths are not supported") "cmd did not warn about the UNC path"
+                # the child's own current directory has to be the share, not C:\Windows
+                Check ($joined -match "CWD=") "the command reported its working directory"
+                Check ($joined -match "localhost|apkinfo-unc|C\$") `
+                      "the command ran inside the share ($joined)"
+                Check ($joined -notmatch "UNC paths are not supported") "nothing complained about the UNC path"
                 # OCR reads a capital I as a lowercase l ("KlND")
                 Check ($joined -match "K[Il]ND=(android|apks)") "the placeholders were expanded for the UNC package"
                 [void][UI]::SendMessageW($viewer.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)

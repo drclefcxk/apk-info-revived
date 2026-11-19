@@ -3,6 +3,11 @@
 // Nothing here needs a device: the placeholder expansion, the command defaults and
 // the two parsers are pure, and the bundle preparation is exercised on a file given
 // on the command line (skipped when absent).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -170,40 +175,55 @@ void test_parse_mdns() {
     check(parse_mdns("").empty(), "empty mdns output yields nothing");
 }
 
-void test_unc_paths() {
-    using apkinfo::process::is_unc_path;
-    using apkinfo::process::run_shell;
-    using apkinfo::process::working_directory_for;
+void test_split_steps() {
+    using apkinfo::install::split_steps;
 
-    check(is_unc_path("\\\\wsl$\\Ubuntu\\home\\me"), "a WSL share is UNC");
-    check(is_unc_path("\\\\wsl.localhost\\Ubuntu\\home\\me\\a.apk"), "the wsl.localhost share is UNC");
-    check(is_unc_path("\\\\server\\share\\file.apk"), "a network share is UNC");
-    check(is_unc_path("//server/share"), "forward slashes count too");
-    check(!is_unc_path("C:\\packages\\a.apk"), "a local path is not UNC");
-    check(!is_unc_path("c:/packages/a.apk"), "a local path with forward slashes is not UNC");
-    check(!is_unc_path("\\\\?\\C:\\packages\\a.apk"), "the device prefix is not a share");
-    check(!is_unc_path(""), "an empty path is not UNC");
-    check(!is_unc_path("a.apk"), "a bare file name is not UNC");
+    const std::vector<std::string> two = split_steps("adb push \"C:\\a b\\x.apk\" /tmp/x && adb shell apk add /tmp/x");
+    check(two.size() == 2, "two steps are split");
+    if (two.size() == 2) {
+        check(two[0] == "adb push \"C:\\a b\\x.apk\" /tmp/x", "the first step keeps its quotes");
+        check(two[1] == "adb shell apk add /tmp/x", "the second step is trimmed");
+    }
 
-    // A local directory is used as it is; a UNC one is replaced, because cmd.exe
-    // cannot start in a UNC directory at all.
-    check(working_directory_for("C:\\packages") == "C:\\packages", "a local working directory is kept");
-    const std::string replaced = working_directory_for("\\\\wsl$\\Ubuntu\\home");
-    check(!replaced.empty() && !is_unc_path(replaced), "a UNC working directory is replaced: " + replaced);
+    check(split_steps("echo \"a && b\"").size() == 1, "a separator inside quotes is left alone");
+    check(split_steps("a && b && c").size() == 3, "three steps");
+    check(split_steps("  adb install x  &&  ").size() == 1, "empty steps are dropped");
+    check(split_steps("").empty(), "an empty command has no steps");
+    check(split_steps("adb install x").size() == 1, "a single command is one step");
 
-    // The replacement really works: cmd reports the directory it ended up in. Without
-    // the fix it answers C:\Windows after refusing the UNC path.
-    const apkinfo::process::Result inside = run_shell("cd", 20000, "\\\\wsl$\\Ubuntu\\home\\me");
-    check(inside.started, "a shell command starts with a UNC working directory");
-    check(inside.output.find("Windows") == std::string::npos,
-          "cmd did not fall back to the Windows directory (got: " + inside.output + ")");
-    check(inside.output.find("UNC") == std::string::npos, "cmd did not warn about UNC paths");
+    // The defaults really are chains
+    check(split_steps(apkinfo::install::default_alpine_command()).size() == 2,
+          "the Alpine default means push, then install");
+    check(split_steps(apkinfo::install::default_android_command()).size() == 1,
+          "the Android default is a single command");
+}
 
-    // A local preferred directory is honoured.
-    const apkinfo::process::Result local = run_shell("cd", 20000, "C:\\Windows");
-    check(local.started, "a local working directory works");
-    check(local.output.find("C:\\Windows") != std::string::npos,
-          "cmd started in the requested local directory (got: " + local.output + ")");
+void test_unc_working_directory() {
+    // The point of dropping cmd.exe: CreateProcessW starts a child in a UNC directory.
+    // Windows is asked for this binary's path, which is then started in \\localhost\C$\...
+    // with --print-cwd, and the child prints the directory it ended up in.
+    wchar_t self[MAX_PATH]{};
+    if (GetModuleFileNameW(nullptr, self, MAX_PATH) == 0) {
+        std::printf("  (cannot resolve the test binary, UNC check skipped)\n");
+        return;
+    }
+    const std::string share = "\\\\localhost\\C$";
+    if (GetFileAttributesW(L"\\\\localhost\\C$\\Windows") == INVALID_FILE_ATTRIBUTES) {
+        std::printf("  (no %s share here, UNC check skipped)\n", share.c_str());
+        return;
+    }
+
+    char self_utf8[MAX_PATH * 2]{};
+    const int self_length = WideCharToMultiByte(CP_UTF8, 0, self, -1, self_utf8, sizeof self_utf8, nullptr, nullptr);
+    check(self_length > 0, "the test binary path converts");
+
+    const std::string directory = share + "\\Windows";
+    const apkinfo::process::Result result =
+        apkinfo::process::run(apkinfo::process::build_command_line(self_utf8, {"--print-cwd"}), 30000, directory);
+    check(result.started, "a child starts with a UNC working directory: " + result.error);
+    check(result.exit_code == 0, "the child finished: " + result.output);
+    check(result.output.find("localhost\\C$\\Windows") != std::string::npos,
+          "the child reports the UNC directory it was started in (got: " + result.output + ")");
 }
 
 void test_prepare(const char* bundle) {
@@ -212,15 +232,6 @@ void test_prepare(const char* bundle) {
     check(single.ok() && single.files.size() == 1 && single.files[0] == "C:\\a\\b.apk",
           "a single apk is passed through");
     check(single.temp_dir.empty(), "nothing is extracted for a single apk");
-
-    // A package on a network share is copied out first, so adb never gets a UNC path.
-    // (The path does not have to exist for the decision, but the copy has to fail
-    // cleanly when it cannot be read.)
-    const apkinfo::install::Prepared from_share =
-        apkinfo::install::prepare("\\\\localhost\\C$\\does-not-exist.apk", apkinfo::ContainerKind::AndroidApk);
-    check(!from_share.ok() && from_share.error.find("share") != std::string::npos,
-          "an unreachable share is reported: " + from_share.error);
-    check(from_share.temp_dir.empty(), "the temporary directory is cleaned up on failure");
 
     // an Alpine package cannot be installed by the built-in installer
     const apkinfo::install::Prepared alpine =
@@ -252,12 +263,20 @@ void test_prepare(const char* bundle) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // the UNC test starts this binary with --print-cwd and reads the directory back
+    if (argc > 1 && std::string(argv[1]) == "--print-cwd") {
+        char directory[MAX_PATH * 2]{};
+        GetCurrentDirectoryA(static_cast<DWORD>(sizeof directory), directory);
+        std::printf("%s\n", directory);
+        return 0;
+    }
     test_defaults();
     test_expand();
     test_placeholders_documented();
     test_parse_devices();
     test_parse_mdns();
-    test_unc_paths();
+    test_split_steps();
+    test_unc_working_directory();
     test_prepare(argc > 1 ? argv[1] : nullptr);
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

@@ -34,27 +34,6 @@ std::string to_utf8(const wchar_t* text, size_t length) {
     return out;
 }
 
-std::string current_directory() {
-    DWORD needed = GetCurrentDirectoryW(0, nullptr);
-    if (needed == 0) return {};
-    std::wstring buffer(static_cast<size_t>(needed), L'\0');
-    const DWORD written = GetCurrentDirectoryW(needed, buffer.data());
-    if (written == 0 || written >= needed) return {};
-    buffer.resize(written);
-    return to_utf8(buffer.c_str(), buffer.size());
-}
-
-std::string temporary_directory() {
-    DWORD needed = GetTempPathW(0, nullptr);
-    if (needed == 0) return {};
-    std::wstring buffer(static_cast<size_t>(needed), L'\0');
-    const DWORD written = GetTempPathW(needed, buffer.data());
-    if (written == 0 || written >= needed) return {};
-    buffer.resize(written);
-    while (!buffer.empty() && (buffer.back() == L'\\' || buffer.back() == L'/')) buffer.pop_back();
-    return to_utf8(buffer.c_str(), buffer.size());
-}
-
 // Output arrives as UTF-8 (adb) or in the console code page (some tools); bytes that
 // are not valid UTF-8 are replaced so the log stays readable either way.
 std::string sanitize_utf8(const std::string& bytes) {
@@ -141,27 +120,6 @@ std::string build_command_line(const std::string& executable, const std::vector<
     return line;
 }
 
-bool is_unc_path(const std::string& utf8_path) {
-    // "\\server\share" or "//server/share", but not the "\\?\C:\..." device prefix
-    if (utf8_path.size() < 3) return false;
-    const bool first = utf8_path[0] == '\\' || utf8_path[0] == '/';
-    const bool second = utf8_path[1] == '\\' || utf8_path[1] == '/';
-    if (!first || !second) return false;
-    const char third = utf8_path[2];
-    return third != '?' && third != '.';
-}
-
-std::string working_directory_for(const std::string& preferred) {
-    if (!preferred.empty()) {
-        // A generous limit: cmd.exe refuses paths it cannot represent, and the
-        // temporary directory is always safe.
-        return is_unc_path(preferred) ? temporary_directory() : preferred;
-    }
-    const std::string cwd = current_directory();
-    if (!cwd.empty() && is_unc_path(cwd)) return temporary_directory();
-    return std::string();  // local: let the child inherit it
-}
-
 Result run(const std::string& command_line, int timeout_ms, const std::string& working_directory) {
     Result result;
 
@@ -235,29 +193,6 @@ Result run(const std::string& command_line, int timeout_ms, const std::string& w
 
     result.output = sanitize_utf8(result.output);
     return result;
-}
-
-Result run_shell(const std::string& command, int timeout_ms, const std::string& preferred_directory) {
-    // cmd.exe /c so the command may use quotes, redirection and &&.
-    std::wstring comspec;
-    {
-        DWORD needed = GetEnvironmentVariableW(L"COMSPEC", nullptr, 0);
-        if (needed > 0) {
-            std::wstring value(needed, L'\0');
-            const DWORD written = GetEnvironmentVariableW(L"COMSPEC", value.data(), needed);
-            if (written > 0) {
-                value.resize(written);
-                comspec = std::move(value);
-            }
-        }
-    }
-    if (comspec.empty()) comspec = L"cmd.exe";
-    (void)to_utf8(comspec.c_str(), comspec.size());  // keep the helper referenced in all builds
-    std::string line = quote_argument(comspec.empty() ? "cmd.exe" : "cmd.exe");
-    line += " /c ";
-    line += command;
-    // cmd.exe cannot start in a UNC directory, so the directory is resolved here.
-    return run(line, timeout_ms, working_directory_for(preferred_directory));
 }
 
 }  // namespace apkinfo::process

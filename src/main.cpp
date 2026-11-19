@@ -601,6 +601,8 @@ std::string placeholder_help_text() {
         text += "  " + tr(token.second) + "\n";
     }
     return text;
+    text += "\n\n" + tr("A command is started directly (no cmd.exe), in the package's directory.");
+    text += "\n" + tr("\"&&\" chains steps; pipes, redirection and %VAR% need \"cmd /c ...\".");
 }
 
 void apply_install_chrome(InstallWindow& window, const ViewState& state) {

@@ -67,7 +67,7 @@ OpenWrt 从 25.12 起使用 `apk`。下图展示在 APK Info 中打开 OpenWrt 2
 
 `adb` 按此顺序查找：设置中指定的路径、`ADB`、`ANDROID_HOME`、`ANDROID_SDK_ROOT`、`PATH`，最后查找常见的 SDK 目录。
 
-外部命令由 `cmd.exe /c` 执行。常用变量有 `{path}`（包的完整路径）、`{file_name}`（文件名）、`{package_name}`（包名）、`{version}`（版本）、`{device}`（选中设备的序列号）和 `{adb}`（adb 路径）。路径可能含空格，在命令中使用 `"{path}"`。
+外部命令直接启动（不经过 shell），工作目录是包所在目录，因此 `cmd.exe` 打不开的 UNC 路径（如 WSL 的 `\\wsl.localhost\…`）也能正常安装。常用变量有 `{path}`（包的完整路径）、`{file_name}`（文件名）、`{package_name}`（包名）、`{version}`（版本）、`{device}`（选中设备的序列号）和 `{adb}`（adb 路径）。路径可能含空格，在命令中使用 `"{path}"`。
 
 </details>
 
